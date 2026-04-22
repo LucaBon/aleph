@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aleph-kb"
+version = "0.1.0"
+description = "Stateless-view knowledge base for LLMs: atomic claims with source spans, verified on every read."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Aleph contributors" }]
+keywords = ["llm", "knowledge-base", "rag", "claims", "wiki"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "anthropic>=0.40.0",
+]
+
+[project.scripts]
+aleph = "aleph.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/your-org/aleph"
+Issues = "https://github.com/your-org/aleph/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aleph"]

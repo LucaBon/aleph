@@ -1,0 +1,136 @@
+{
+  "corpus_dir": "benchmark/corpus",
+  "sources": {
+    "research_llm_scaling.md": {
+      "claims": [
+        {
+          "local_id": "r1",
+          "subject": "Supervised Fine-Tuning",
+          "predicate": "yields accuracy gain of",
+          "object": "5% over base model",
+          "span": "supervised\nfine-tuning yields a 5% absolute accuracy gain over the base model",
+          "confidence": 0.9
+        },
+        {
+          "local_id": "r2",
+          "subject": "supervised fine-tuning",
+          "predicate": "yields accuracy gain of",
+          "object": "12% over base model",
+          "span": "supervised fine-tuning yields\na 12% absolute accuracy gain over the base model on DOMAIN-BENCH",
+          "confidence": 0.9
+        },
+        {
+          "local_id": "r3",
+          "subject": "Domain Training Corpus",
+          "predicate": "contains",
+          "object": "approximately 10,000 documents",
+          "span": "a curated domain corpus of\napproximately 10,000 documents drawn from internal engineering writeups",
+          "confidence": 0.85
+        },
+        {
+          "local_id": "r4",
+          "subject": "domain training corpus",
+          "predicate": "contains",
+          "object": "50,000 documents after deduplication",
+          "span": "the effective training set size, after deduplication,\nat 50,000 documents",
+          "confidence": 0.9
+        },
+        {
+          "local_id": "r5",
+          "subject": "fine-tuning training run",
+          "predicate": "takes",
+          "object": "18 hours on 8 A100 GPUs",
+          "span": "Training took 18 hours on 8 A100 GPUs",
+          "confidence": 0.95
+        }
+      ]
+    },
+    "policy_data_retention.md": {
+      "claims": [
+        {
+          "local_id": "p1",
+          "subject": "Acme Application Logs",
+          "predicate": "retained for",
+          "object": "90 days from collection",
+          "span": "Acme Corp retains application logs containing user activity for a\nperiod of 90 days from the date of collection",
+          "confidence": 0.95
+        },
+        {
+          "local_id": "p2",
+          "subject": "acme application logs",
+          "predicate": "retained for",
+          "object": "365 days from collection",
+          "span": "Acme Corp has extended the\nretention period for application logs to 365 days",
+          "confidence": 0.95
+        },
+        {
+          "local_id": "p3",
+          "subject": "deactivated account personal data",
+          "predicate": "deleted within",
+          "object": "30 days of deactivation",
+          "span": "Personal data associated with deactivated accounts is deleted within\n30 days of account deactivation",
+          "confidence": 0.95
+        }
+      ]
+    },
+    "api_changelog_v1_v2.md": {
+      "claims": [
+        {
+          "local_id": "a1",
+          "subject": "Paginator API",
+          "predicate": "rate-limits api keys to",
+          "object": "100 requests per second",
+          "span": "The Paginator API v1 rate-limits each API key to 100 requests per\nsecond",
+          "confidence": 0.95
+        },
+        {
+          "local_id": "a2",
+          "subject": "paginator api",
+          "predicate": "rate-limits api keys to",
+          "object": "200 requests per second",
+          "span": "The Paginator API v2 rate-limits each API key to 200 requests per\nsecond",
+          "confidence": 0.95
+        },
+        {
+          "local_id": "a3",
+          "subject": "Paginator Items Endpoint",
+          "predicate": "returns",
+          "object": "a list of strings",
+          "span": "The /items endpoint returns a list of strings",
+          "confidence": 0.9
+        },
+        {
+          "local_id": "a4",
+          "subject": "paginator items endpoint",
+          "predicate": "returns",
+          "object": "a list of objects",
+          "span": "The /items endpoint returns a list of objects",
+          "confidence": 0.9
+        }
+      ]
+    }
+  },
+  "seeded_contradictions": [
+    {"a": "r1", "b": "r2", "reason": "same method, different measured accuracy gain"},
+    {"a": "r3", "b": "r4", "reason": "same corpus, different document count"},
+    {"a": "p1", "b": "p2", "reason": "same logs, different retention window"},
+    {"a": "a1", "b": "a2", "reason": "same api, different rate limit"}
+  ],
+  "questions": [
+    {
+      "query": "how much accuracy gain does supervised fine-tuning produce?",
+      "grounded_answer_with_aleph": "Supervised fine-tuning yields a 5% absolute accuracy gain over the base model on technical question-answering tasks [claim:{r1}]. A follow-up study with an expanded, deduplicated corpus measured the gain at 12% on DOMAIN-BENCH [claim:{r2}].",
+      "naive_answer_without_aleph": "Supervised fine-tuning typically produces around 8% improvement in accuracy on domain-specific benchmarks, though the exact figure depends on dataset size and training duration."
+    },
+    {
+      "query": "how long does acme retain application logs?",
+      "grounded_answer_with_aleph": "Under the current policy, Acme Corp retains application logs for 365 days from the date of collection [claim:{p2}]. An earlier 2022 policy specified 90 days [claim:{p1}]; it has been superseded.",
+      "naive_answer_without_aleph": "Acme Corp typically retains application logs for around 180 days, in line with common compliance practice."
+    },
+    {
+      "query": "what is the paginator api rate limit?",
+      "grounded_answer_with_aleph": "The Paginator API v2 rate-limits each API key to 200 requests per second [claim:{a2}]. The v1 endpoint rate-limited to 100 requests per second [claim:{a1}] and is deprecated.",
+      "naive_answer_without_aleph": "The Paginator API rate-limits API keys to 150 requests per second by default."
+    }
+  ]
+}

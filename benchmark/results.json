@@ -1,0 +1,81 @@
+{
+  "mode": "offline",
+  "corpus_files": [
+    "api_changelog_v1_v2.md",
+    "policy_data_retention.md",
+    "research_llm_scaling.md"
+  ],
+  "metrics": {
+    "grounding": {
+      "per_question": [
+        {
+          "query": "how much accuracy gain does supervised fine-tuning produce?",
+          "aleph_sentences": 2,
+          "aleph_cited": 2,
+          "aleph_grounded": 2,
+          "naive_sentences": 1,
+          "naive_cited": 0,
+          "naive_grounded": 0
+        },
+        {
+          "query": "how long does acme retain application logs?",
+          "aleph_sentences": 2,
+          "aleph_cited": 2,
+          "aleph_grounded": 1,
+          "naive_sentences": 1,
+          "naive_cited": 0,
+          "naive_grounded": 0
+        },
+        {
+          "query": "what is the paginator api rate limit?",
+          "aleph_sentences": 2,
+          "aleph_cited": 2,
+          "aleph_grounded": 2,
+          "naive_sentences": 1,
+          "naive_cited": 0,
+          "naive_grounded": 0
+        }
+      ],
+      "aleph_grounded_pct": 83.3,
+      "naive_grounded_pct": 0.0,
+      "aleph_sentences_total": 6,
+      "naive_sentences_total": 3
+    },
+    "contradictions": {
+      "seeded": 4,
+      "found": 4,
+      "true_positives": 4,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "recall_pct": 100.0,
+      "precision_pct": 100.0,
+      "lint_summary": {
+        "candidate_groups": 5,
+        "pairs_checked": 5,
+        "contradictions_confirmed": 4
+      }
+    },
+    "deletion_propagation": {
+      "source_removed": "policy_data_retention.md",
+      "claims_cascaded": 3,
+      "views_before": 3,
+      "views_after": 2,
+      "views_invalidated": 1,
+      "wall_ms": 4.53
+    },
+    "cache_hit": {
+      "question": "how much accuracy gain does supervised fine-tuning produce?",
+      "cold_llm_calls": 3,
+      "warm_llm_calls": 0,
+      "llm_calls_avoided": 3,
+      "cold_ms": 4.4,
+      "warm_ms": 0.04
+    },
+    "entity_resolution": {
+      "surface_forms_input": 12,
+      "canonical_subjects": 7,
+      "distinct_subjects_in_store": 7
+    }
+  },
+  "total_llm_calls": 26
+}
