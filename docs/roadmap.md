@@ -15,8 +15,8 @@ This roadmap came out of an external review (September 2026). Phases are ordered
 |---|---|---|
 | Every stored claim's span is a verbatim substring of its source | **Yes** | Enforced at write time (`claim-add`, `ingest._locate_span`) |
 | Removing a source invalidates cached views that cited it | **Yes** | e2e tests; smoke benchmark |
-| No view, concept or disposition survives a retraction (transitively) | **Implemented, not yet verified** | `Store.check_invariants()` + `invariant-check` exist; every deactivation path (remove, supersede, retract, `retracted` disposition) runs one cascade that reopens dependent contradictions. `tests/test_invariants.py` (hypothesis, `pip install -e .[dev]`) passes 1000 examples × 60 steps, plus targeted scenarios. Mutation-checked: disabling revival, reopening or view invalidation makes it fail. `benchmark/canary.py` reports 0 leaks and 0% over-invalidation. Not yet in CI |
-| Alias merges are reversible | **Implemented, not yet verified** | `alias_events` merge log, `alias-undo`, and `alias-add` refuses to overwrite without `--force` and rejects cycles along the whole chain. Covered by property and scenario tests. Not yet in CI |
+| No view, concept or disposition survives a retraction (transitively) | **Yes** | `Store.check_invariants()` + `invariant-check` exist; every deactivation path (remove, supersede, retract, `retracted` disposition) runs one cascade that reopens dependent contradictions. `tests/test_invariants.py` (hypothesis, `pip install -e .[dev]`) passes 1000 examples × 60 steps, plus targeted scenarios. Mutation-checked: disabling revival, reopening or view invalidation makes it fail. `benchmark/canary.py` reports 0 leaks, 0 invariant violations and 0% over-invalidation. Both run in CI on every push (Python 3.10/3.12/3.14) |
+| Alias merges are reversible | **Yes** | `alias_events` merge log, `alias-undo`, and `alias-add` refuses to overwrite without `--force` and rejects cycles along the whole chain. Covered by property and scenario tests, run in CI on every push |
 | A claim faithfully represents its span (numbers, negation, scope) | **No** | Phase 2: fidelity checker + review queue |
 | The verifier's false-accept / false-reject rates are known | **No** | Phase 2: labeled eval set |
 | Answers surface contradicting evidence they didn't use | **No** | Phase 3 |
@@ -40,10 +40,12 @@ The "83%" figure in earlier READMEs came from a fake-LLM run on six sentences. I
   - a `dev` extra in `pyproject.toml` with `pytest` and `hypothesis` (done);
   - remove the hardcoded `/home/claude/aleph/...` paths from `tests/e2e_fake_llm.py` (done: none remain);
   - one command that runs both e2e scripts plus the pytest suite (done: `pytest` runs the property suite, both e2e scripts and the canary benchmark via `tests/test_scripts.py`);
-  - CI that runs that command (written: `.github/workflows/ci.yml` runs `pytest` under the `thorough` profile on Python 3.10/3.12/3.14; the repo has no remote yet, so it has never run).
+  - CI that runs that command (done: `.github/workflows/ci.yml` runs `pytest` under the `thorough` profile on Python 3.10/3.12/3.14 on every push and pull request).
 - **Schema versioning** (done): a read-only `schema_version` config key and the numbered `MIGRATIONS` list in `db.py`. SCHEMA + `_run_alters` define version 1; an unversioned store is stamped 1, and a store from a newer aleph is refused (`schema_too_new`). `_run_alters` is still fine for adding columns, but Phase 2 (`proposition`) and Phase 4 (`features`) change what existing rows mean and go through `MIGRATIONS`.
 
 **Exit criteria:** a fresh clone passes the full test command with no path edits, and CI runs it on every push.
+
+**Status:** met. CI installs from a fresh checkout and passes on every push (first green run 2026-09-28, [LucaBon/aleph](https://github.com/LucaBon/aleph)).
 
 ### Phase 1: "Fixed cleanly" as a tested guarantee
 - `Store.check_invariants()` and the `invariant-check` agent command. The invariant: no active view, active/attested concept or resolved contradiction depends on a retracted, superseded or removed claim.
@@ -52,13 +54,21 @@ The "83%" figure in earlier READMEs came from a fake-LLM run on six sentences. I
 - Alias merge log, `alias-undo`, and no silent alias overwrite.
 - Canary leakage benchmark (`benchmark/canary.py`), including the over-invalidation rate.
 
-**Status:** implemented. The thorough property profile and the canary benchmark pass locally, but neither has run in CI yet. `invariant-check` returns no violations on the `corpus/` store (25 sources, 198 claims, 5 `distinguish` resolutions, 12 aliases, 8 draft concepts), and still none after removing each of its 25 sources in turn (checked 2026-09-28).
+**Status:** exit criteria met (2026-09-28). The thorough property profile and the canary benchmark (0 leaks, 0 invariant violations) pass in CI on every push. `invariant-check` returns no violations on the `corpus/` store (25 sources, 198 claims, 5 `distinguish` resolutions, 12 aliases, 8 draft concepts), and still none after removing each of its 25 sources in turn (checked 2026-09-28).
 
 Two pre-existing alias bugs were found by the property test and fixed:
 - merging into a subject that was itself an alias left claims under a non-canonical subject;
 - overwriting an alias could create a resolution cycle.
 
 `remove_source` no longer fails the `superseded_by` foreign key when another source's claim was superseded by one of its claims.
+
+A code review of the Phase 0–1 branch (PR #1) found more channels by which a derived state could outlive its grounds. Each was fixed with a regression test in `tests/test_invariants.py`:
+- re-disposing a `replicate` compounded or stranded its confidence bump;
+- `lint --resolve-by-recency` force-resolved pairs onto inactive claims;
+- `concept-validate` could revive superseded or invalidated concepts;
+- `source-unretract` revived claims a `retracted` disposition had dropped, and `source-authority-set` could flip retraction without the cascade;
+- `retract_source` and `source-replace` weren't atomic;
+- the predicate-alias cycle check only looked at the end of the chain.
 
 **Exit criteria:**
 - `tests/test_invariants.py` passes under the `thorough` profile (1000 examples × 60 steps) in CI.
