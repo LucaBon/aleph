@@ -7,17 +7,20 @@ import os
 import sys
 from pathlib import Path
 
-from .agent_cli import register_agent_commands
-from .db import Store
+from .agent_cli import cmd_report_agent, register_agent_commands
+from .db import SchemaVersionError, Store
 from .ingest import ingest_paths
 from .lint import lint as lint_cmd, resolve_by_recency
-from .llm import LLM, DEFAULT_MODEL
+from .llm import LLM, MockLLM, DEFAULT_MODEL
 from .query import query as query_cmd
 
 
 # subcommands that need an LLM (API mode). Everything else is agent-mode and
-# needs no API key.
-LLM_COMMANDS = {"ingest", "ask", "lint"}
+# needs no API key. When the user supplies --mock-llm or sets
+# ALEPH_LLM_FIXTURES, these still route through the same paths but use the
+# deterministic MockLLM adapter instead, so an ANTHROPIC_API_KEY is not
+# required.
+LLM_COMMANDS = {"ingest", "ask", "lint", "concept-derive", "concept-rebuild", "concept-validate", "contradiction-scan", "claim-condition-extract", "predicate-sense-extract"}
 
 
 def _default_db_path() -> Path:
@@ -31,10 +34,20 @@ def _default_db_path() -> Path:
 
 def _store(args) -> Store:
     db = getattr(args, "db", None)
-    return Store(Path(db) if db else _default_db_path())
+    locale = getattr(args, "locale", None)
+    return Store(Path(db) if db else _default_db_path(), locale=locale)
 
 
-def _llm(args) -> LLM:
+def _llm(args):
+    """Construct an LLM adapter. ``--mock-llm path`` (or the
+    ``ALEPH_LLM_FIXTURES`` env var) substitutes a :class:`MockLLM` that
+    reads canned responses from the given fixtures file — used for CI,
+    smoke tests, and developer iteration without an API key (P2.1)."""
+    fixtures = getattr(args, "mock_llm", None) or os.environ.get(
+        "ALEPH_LLM_FIXTURES"
+    )
+    if fixtures:
+        return MockLLM(fixtures)
     return LLM(model=getattr(args, "model", None) or DEFAULT_MODEL)
 
 
@@ -42,7 +55,8 @@ def cmd_ingest(args) -> int:
     store = _store(args)
     llm = _llm(args)
     paths = [Path(p) for p in args.paths]
-    results = ingest_paths(store, llm, paths, verbose=args.verbose)
+    results = ingest_paths(store, llm, paths, verbose=args.verbose,
+                           extract_conditions=getattr(args, 'extract_conditions', False))
     for r in results:
         if r["status"] == "ingested":
             print(f"  + {r['path']}  ({r['claims_added']} claims, "
@@ -57,11 +71,28 @@ def cmd_ingest(args) -> int:
 def cmd_ask(args) -> int:
     store = _store(args)
     llm = _llm(args)
+    ctx = None
+    if args.context:
+        try:
+            ctx = json.loads(args.context)
+        except json.JSONDecodeError as e:
+            print(f"error: --context is not valid JSON: {e}", file=sys.stderr)
+            return 2
+        # If date is ISO string, convert to unix seconds
+        if isinstance(ctx.get("date"), str):
+            from datetime import datetime
+            try:
+                ctx["date"] = datetime.fromisoformat(ctx["date"]).timestamp()
+            except ValueError as e:
+                print(f"error: --context.date not ISO parseable: {e}",
+                      file=sys.stderr)
+                return 2
     result = query_cmd(
         store, llm, args.question,
         retrieve_k=args.k,
         verify=not args.no_verify,
         use_cache=not args.no_cache,
+        context=ctx,
     )
     if args.json:
         print(json.dumps({
@@ -166,6 +197,123 @@ def cmd_clear_cache(args) -> int:
     return 0
 
 
+def cmd_report(args) -> int:
+    """One-shot diagnostic snapshot (P2.2).
+
+    Reuses ``cmd_report_agent`` for the JSON data path and optionally
+    pretty-prints it as text or markdown. Useful before running LLM-gated
+    commands (concept-derive / contradiction-scan) to eyeball claim
+    density and subject coverage.
+    """
+    store = _store(args)
+
+    # Reuse agent-mode handler to compute the report. It prints JSON to
+    # stdout; capture it through the store directly instead of reparsing.
+    # Simpler: call the same composition helper locally.
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        cmd_report_agent(args, store)
+    report = json.loads(buf.getvalue())
+    if not report.get("ok"):
+        print(buf.getvalue())
+        return 1
+    data = report["data"]
+
+    if args.format == "json":
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+
+    lines = _format_report_text(data, markdown=(args.format == "markdown"))
+    print("\n".join(lines))
+    return 0
+
+
+def _format_report_text(data: dict, *, markdown: bool) -> list[str]:
+    h1 = "# " if markdown else ""
+    h2 = "## " if markdown else ""
+    bullet = "- "
+
+    lines = [f"{h1}Aleph store report"]
+    stats = data["stats"]
+    lines.append("")
+    lines.append(f"{h2}Totals")
+    for key in ("sources", "claims_active", "claims_superseded",
+                "contradictions_open", "cached_views"):
+        lines.append(f"{bullet}{key}: {stats.get(key)}")
+
+    lines.append("")
+    lines.append(f"{h2}Sources by domain")
+    for domain, count in sorted(data["sources"]["by_domain"].items()):
+        lines.append(f"{bullet}{domain}: {count}")
+    if data["sources"]["legal_by_authority_type"]:
+        lines.append("")
+        lines.append(f"{h2}Legal sources by authority type")
+        for at, count in sorted(
+            data["sources"]["legal_by_authority_type"].items()
+        ):
+            lines.append(f"{bullet}{at}: {count}")
+
+    lines.append("")
+    lines.append(f"{h2}Top claim subjects (active)")
+    for item in data["claims"]["top_subjects"][:20]:
+        lines.append(f"{bullet}{item['subject']}: {item['count']}")
+
+    lines.append("")
+    lines.append(f"{h2}Concepts by status")
+    for st, n in sorted(data["concepts"]["by_status"].items()):
+        lines.append(f"{bullet}{st}: {n}")
+
+    lines.append("")
+    lines.append(f"{h2}Contradictions")
+    lines.append(f"{bullet}open: {data['contradictions']['open']}")
+    lines.append(f"{bullet}resolved: {data['contradictions']['resolved']}")
+    lines.append(
+        f"{bullet}cross_subject: {data['contradictions']['cross_subject']}"
+    )
+    for disp, n in sorted(
+        (data["contradictions"]["by_disposition"] or {}).items(),
+        key=lambda p: (p[0] or ""),
+    ):
+        lines.append(f"{bullet}{disp or 'null'}: {n}")
+
+    lines.append("")
+    lines.append(f"{h2}Aliases")
+    lines.append(f"{bullet}total: {data['aliases']['total']}")
+    for t in data["aliases"]["top_targets"]:
+        lines.append(
+            f"{bullet}{t['canonical_to']}: {t['alias_count']} alias(es)"
+        )
+
+    gaps = data["hints"]["subjects_without_concepts"]
+    if gaps:
+        lines.append("")
+        lines.append(
+            f"{h2}Subjects without supporting concepts "
+            "(candidates for concept-derive)"
+        )
+        for s in gaps:
+            lines.append(f"{bullet}{s}")
+
+    cand = data["hints"]["contradiction_scan_candidates"]
+    if cand:
+        lines.append("")
+        lines.append(
+            f"{h2}Possible contradiction pairs "
+            "(candidates for contradiction-scan)"
+        )
+        for pair in cand:
+            a, b = pair["claim_a"], pair["claim_b"]
+            lines.append(
+                f"{bullet}{pair['subject']}: "
+                f"[{a['id']}] {a['predicate']} {a['object']!r} "
+                f"vs [{b['id']}] {b['predicate']} {b['object']!r}"
+            )
+
+    return lines
+
+
 def _fmt_stats(s: dict) -> str:
     return (
         f"sources:              {s['sources']}\n"
@@ -187,6 +335,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="path to sqlite file (default: ./aleph.db or ~/.aleph/aleph.db)")
     common.add_argument("--model", default=argparse.SUPPRESS,
                         help=f"LLM model (default: {DEFAULT_MODEL})")
+    common.add_argument("--locale", default=argparse.SUPPRESS,
+                        help="subject normalization locale (en|it); seeds the "
+                             "store on first connection. Use config-set locale "
+                             "to change later.")
+    common.add_argument("--mock-llm", dest="mock_llm", default=argparse.SUPPRESS,
+                        help="path to a MockLLM fixtures file (JSON or YAML). "
+                             "When set, the LLM adapter is swapped for a "
+                             "deterministic one that reads canned responses — "
+                             "useful for CI and smoke tests (P2.1). Also "
+                             "honours the ALEPH_LLM_FIXTURES env var.")
 
     parser = argparse.ArgumentParser(
         prog="aleph",
@@ -201,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("ingest", parents=[common], help="ingest a file or directory")
     p.add_argument("paths", nargs="+", help="files or directories (.txt, .md)")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--extract-conditions", action="store_true",
+                   help="run scope/method/limitation extraction pre-pass (WS-D)")
     p.set_defaults(func=cmd_ingest)
 
     p = sub.add_parser("ask", parents=[common], help="ask a question; generates and verifies an answer")
@@ -208,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-k", type=int, default=30, help="how many claims to retrieve (default 30)")
     p.add_argument("--no-verify", action="store_true", help="skip the verifier pass")
     p.add_argument("--no-cache", action="store_true", help="bypass view cache")
+    p.add_argument("--context", help='JSON, e.g. \'{"jurisdiction":"US-CA","date":"2026-04-22"}\'')
     p.add_argument("--json", action="store_true", help="emit full structured result")
     p.set_defaults(func=cmd_ask)
 
@@ -235,18 +396,48 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("clear-cache", parents=[common], help="drop all cached views")
     p.set_defaults(func=cmd_clear_cache)
 
+    # P2.2: one-shot diagnostics snapshot
+    p = sub.add_parser("report", parents=[common],
+                       help="one-shot snapshot of store state (P2.2)")
+    p.add_argument("--format", choices=["text", "markdown", "json"],
+                   default="text")
+    p.set_defaults(func=cmd_report)
+
     # agent commands: direct CLI-level operations Claude Code calls.
     agent_command_names = register_agent_commands(sub, common)
 
     args = parser.parse_args(argv)
-    if args.cmd in LLM_COMMANDS and not os.environ.get("ANTHROPIC_API_KEY"):
+    mock_fixtures = getattr(args, "mock_llm", None) or os.environ.get(
+        "ALEPH_LLM_FIXTURES"
+    )
+    if (
+        args.cmd in LLM_COMMANDS
+        and not mock_fixtures
+        and not os.environ.get("ANTHROPIC_API_KEY")
+    ):
         print("error: ANTHROPIC_API_KEY not set "
-              "(this command runs the LLM directly; use the agent-mode commands instead)",
+              "(this command runs the LLM directly; use the agent-mode commands instead, "
+              "or pass --mock-llm PATH / set ALEPH_LLM_FIXTURES for offline mode)",
               file=sys.stderr)
         return 2
     # agent commands receive (args, store) while API-mode ones take just (args)
     if args.cmd in agent_command_names:
-        store = _store(args)
+        try:
+            store = _store(args)
+        except ValueError as e:
+            # e.g. unknown --locale or locale conflict — preserve the JSON
+            # envelope contract for agent-mode callers.
+            print(json.dumps({
+                "ok": False,
+                "error": {"code": "invalid_locale", "message": str(e)},
+            }, ensure_ascii=False))
+            return 1
+        except SchemaVersionError as e:
+            print(json.dumps({
+                "ok": False,
+                "error": {"code": "schema_too_new", "message": str(e)},
+            }, ensure_ascii=False))
+            return 1
         return args.func(args, store)
     return args.func(args)
 

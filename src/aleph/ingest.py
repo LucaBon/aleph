@@ -138,12 +138,17 @@ def _locate_span_whitespace_tolerant(
     return None
 
 
-def ingest_file(store: Store, llm: LLM, path: Path, verbose: bool = False) -> dict:
+def ingest_file(store: Store, llm: LLM, path: Path, verbose: bool = False, extract_conditions: bool = False) -> dict:
     """Ingest a single file. Returns a summary dict."""
     text = path.read_text(encoding="utf-8", errors="replace")
     source_id = store.add_source(str(path), text)
     if source_id is None:
         return {"path": str(path), "status": "skipped", "reason": "already ingested"}
+
+    # WS-D: pre-pass to extract scope/method/sample/etc. claims
+    scope_claim_ids: list[tuple[int, str]] = []  # (claim_id, kind)
+    if extract_conditions:
+        scope_claim_ids = _extract_scope_claims(store, llm, source_id, text)
 
     total_claims = 0
     dropped = 0
@@ -239,11 +244,16 @@ def ingest_file(store: Store, llm: LLM, path: Path, verbose: bool = False) -> di
                 )
                 continue
             start, end = located
-            store.add_claim(source_id, subj, pred, obj, start, end, conf)
+            atomic_claim_id = store.add_claim(source_id, subj, pred, obj, start, end, conf)
             total_claims += 1
+            # WS-D: link every scope claim as a condition of this atomic claim
+            if extract_conditions and scope_claim_ids:
+                from . import conditions as _cond_mod
+                for scope_id, scope_kind in scope_claim_ids:
+                    _cond_mod.link_condition(store, atomic_claim_id, scope_id, scope_kind, explicit=True)
     # any cached views are now potentially stale
     store.clear_cache()
-    return {
+    result = {
         "path": str(path),
         "status": "ingested",
         "source_id": source_id,
@@ -252,9 +262,44 @@ def ingest_file(store: Store, llm: LLM, path: Path, verbose: bool = False) -> di
         "claims_dropped_ungrounded": dropped,
         "dropped": dropped_details,
     }
+    # WS-D: include scope claim info when extract_conditions was used
+    if extract_conditions:
+        result["scope_claims_added"] = len(scope_claim_ids)
+        result["scope_claim_ids"] = [sid for sid, _kind in scope_claim_ids]
+    return result
 
 
-def ingest_paths(store: Store, llm: LLM, paths: list[Path], verbose: bool = False) -> list[dict]:
+# ----- WS-D scope extraction (opt-in via extract_conditions=True) -----
+
+def _extract_scope_claims(store: Store, llm: LLM, source_id: int, text: str) -> list[tuple[int, str]]:
+    """Pre-pass: extract scope/method/sample/limitation/assumption claims from the
+    whole document. Returns list of (claim_id, kind) pairs for linking."""
+    from . import conditions
+
+    scope_items = conditions.extract_scope_from_source(llm, text)
+    result: list[tuple[int, str]] = []
+    for scope in scope_items:
+        located = _locate_span(text, scope.span, 0)
+        if located is None:
+            log(
+                "scope_claim_dropped",
+                level="warning",
+                reason="span_not_in_source",
+                source_id=source_id,
+                subject=scope.subject,
+                span_preview=scope.span[:120],
+            )
+            continue
+        start, end = located
+        claim_id = store.add_claim(
+            source_id, scope.subject, "applies-to", scope.object_,
+            start, end, scope.confidence,
+        )
+        result.append((claim_id, scope.kind))
+    return result
+
+
+def ingest_paths(store: Store, llm: LLM, paths: list[Path], verbose: bool = False, extract_conditions: bool = False) -> list[dict]:
     """Ingest one or more paths. Recurses into directories."""
     files: list[Path] = []
     for p in paths:
@@ -268,5 +313,5 @@ def ingest_paths(store: Store, llm: LLM, paths: list[Path], verbose: bool = Fals
     for f in files:
         if verbose:
             print(f"ingesting {f}...")
-        results.append(ingest_file(store, llm, f, verbose=verbose))
+        results.append(ingest_file(store, llm, f, verbose=verbose, extract_conditions=extract_conditions))
     return results

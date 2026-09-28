@@ -1,0 +1,267 @@
+[
+  {
+    "slug": "art-52-cp",
+    "title": "Art. 52 c.p. — Legittima difesa",
+    "url": "https://www.brocardi.it/codice-penale/libro-primo/titolo-iii/capo-i/art52.html",
+    "domain": "legal_statute",
+    "authority_hint": "codice_penale",
+    "retrieved_at": "2026-04-23T10:37:00Z",
+    "status": "ok",
+    "bytes": 1375
+  },
+  {
+    "slug": "art-55-cp",
+    "title": "Art. 55 c.p. — Eccesso colposo",
+    "url": "https://www.brocardi.it/codice-penale/libro-primo/titolo-iii/capo-i/art55.html",
+    "domain": "legal_statute",
+    "authority_hint": "codice_penale",
+    "retrieved_at": "2026-04-23T10:37:00Z",
+    "status": "ok",
+    "bytes": 1052
+  },
+  {
+    "slug": "art-61-cp",
+    "title": "Art. 61 c.p. — Circostanze aggravanti comuni",
+    "url": "https://www.filodiritto.com/codici/codice-penale/capo-ii-delle-circostanze-del-reato/art-61-circostanze-aggravanti-comuni",
+    "domain": "legal_statute",
+    "authority_hint": "codice_penale",
+    "retrieved_at": "2026-04-23T10:38:00Z",
+    "status": "ok",
+    "notes": "Brocardi.it returned English-translated summary on first fetch; substituted to filodiritto.com which returned full Italian verbatim text.",
+    "bytes": 3386
+  },
+  {
+    "slug": "art-62-cp",
+    "title": "Art. 62 c.p. — Circostanze attenuanti comuni",
+    "url": "https://www.brocardi.it/codice-penale/libro-primo/titolo-iii/capo-ii/art62.html",
+    "domain": "legal_statute",
+    "authority_hint": "codice_penale",
+    "retrieved_at": "2026-04-23T10:37:00Z",
+    "status": "ok",
+    "bytes": 1739
+  },
+  {
+    "slug": "art-62bis-cp",
+    "title": "Art. 62-bis c.p. — Circostanze attenuanti generiche",
+    "url": "https://www.brocardi.it/codice-penale/libro-primo/titolo-iii/capo-ii/art62bis.html",
+    "domain": "legal_statute",
+    "authority_hint": "codice_penale",
+    "retrieved_at": "2026-04-23T10:37:00Z",
+    "status": "ok",
+    "bytes": 1404
+  },
+  {
+    "slug": "art-575-cp",
+    "title": "Art. 575 c.p. — Omicidio",
+    "url": "https://www.brocardi.it/codice-penale/libro-secondo/titolo-xii/capo-i/art575.html",
+    "domain": "legal_statute",
+    "authority_hint": "codice_penale",
+    "retrieved_at": "2026-04-23T10:38:00Z",
+    "status": "ok",
+    "bytes": 1020
+  },
+  {
+    "slug": "art-576-cp",
+    "title": "Art. 576 c.p. — Omicidio aggravato (ergastolo)",
+    "url": "https://www.brocardi.it/codice-penale/libro-secondo/titolo-xii/capo-i/art576.html",
+    "domain": "legal_statute",
+    "authority_hint": "codice_penale",
+    "retrieved_at": "2026-04-23T10:39:00Z",
+    "status": "ok",
+    "bytes": 1621
+  },
+  {
+    "slug": "art-577-cp",
+    "title": "Art. 577 c.p. — Altre circostanze aggravanti (coniuge, convivente)",
+    "url": "https://www.brocardi.it/codice-penale/libro-secondo/titolo-xii/capo-i/art577.html",
+    "domain": "legal_statute",
+    "authority_hint": "codice_penale",
+    "retrieved_at": "2026-04-23T10:39:00Z",
+    "status": "ok",
+    "bytes": 1781
+  },
+  {
+    "slug": "art-579-cp",
+    "title": "Art. 579 c.p. — Omicidio del consenziente",
+    "url": "https://www.brocardi.it/codice-penale/libro-secondo/titolo-xii/capo-i/art579.html",
+    "domain": "legal_statute",
+    "authority_hint": "codice_penale",
+    "retrieved_at": "2026-04-23T10:39:00Z",
+    "status": "ok",
+    "bytes": 1179
+  },
+  {
+    "slug": "art-584-cp",
+    "title": "Art. 584 c.p. — Omicidio preterintenzionale",
+    "url": "https://www.brocardi.it/codice-penale/libro-secondo/titolo-xii/capo-i/art584.html",
+    "domain": "legal_statute",
+    "authority_hint": "codice_penale",
+    "retrieved_at": "2026-04-23T10:39:00Z",
+    "status": "ok",
+    "bytes": 1104
+  },
+  {
+    "slug": "legge-69-2019-codice-rosso",
+    "title": "Legge 19 luglio 2019, n. 69 — Codice Rosso",
+    "url": "https://www.gazzettaufficiale.it/eli/id/2019/07/25/19G00076/sg",
+    "domain": "legal_statute",
+    "authority_hint": "legge_riforma",
+    "retrieved_at": "2026-04-23T10:43:00Z",
+    "status": "ok",
+    "notes": "fetched-summary-only; verbatim not available — WebFetch model refused full reproduction from multiple PDF/HTML sources (gazzettaufficiale, archiviopenale, sulpl.it, ordineavvocatimilano.it) citing 'copyright'. File assembled from per-article verbatim fragments of the new codice-penale articles (558-bis, 583-quinquies, 387-bis, 612-ter) and structural descriptions.",
+    "bytes": 4877
+  },
+  {
+    "slug": "legge-119-2013-femminicidio",
+    "title": "Legge 15 ottobre 2013, n. 119 — conversione del d.l. 93/2013 su femminicidio",
+    "url": "https://www.protezionecivile.gov.it/it/normativa/legge-n--119-del-2013-di-conversione-del-decreto-legge-n--93-del-2013-con-disposizioni-di-protezione-civile/",
+    "domain": "legal_statute",
+    "authority_hint": "legge_riforma",
+    "retrieved_at": "2026-04-23T10:43:00Z",
+    "status": "ok",
+    "notes": "fetched-summary-only; verbatim not available — WebFetch returned only Art. 1 and Art. 2 verbatim plus summary of criminal-law modifications. Full text locked behind SSO on altalex.com.",
+    "bytes": 4475
+  },
+  {
+    "slug": "legge-38-2009-stalking",
+    "title": "Legge 23 aprile 2009, n. 38 — atti persecutori (stalking)",
+    "url": "https://www.brocardi.it/codice-penale/libro-secondo/titolo-xii/capo-iii/sezione-iii/art612bis.html",
+    "domain": "legal_statute",
+    "authority_hint": "legge_riforma",
+    "retrieved_at": "2026-04-23T10:42:00Z",
+    "status": "ok",
+    "notes": "parlamento.it returned 403; 1522.eu returned only summary. File uses verbatim art. 612-bis c.p. (the core innovation introduced by this law) from Brocardi.it, plus procedural summary of L. 38/2009.",
+    "bytes": 3611
+  },
+  {
+    "slug": "cass-ssuu-40986-2018",
+    "title": "Cass. pen. SS.UU. n. 40986/2018 — successione di leggi penali nel tempo (reati ad evento differito)",
+    "url": "https://www.avvocatocastellaneta.it/articoli/dei-delitti-delle-pene/ssuu-24-09-2018-n-40986",
+    "domain": "legal_case",
+    "authority_hint": "cassazione_ssuu",
+    "retrieved_at": "2026-04-23T10:46:00Z",
+    "status": "substituted",
+    "notes": "Original slug assumed Cass. SS.UU. n. 40986/2018 = legittima difesa. In reality, Cass. SS.UU. n. 40986/2018 verte su 'successione di leggi penali e reati ad evento differito' (caso omicidio stradale post art. 589-bis). The actual sentenza matching the number is retained; for legittima difesa post-riforma 2019, no SS.UU. has ruled — the Sez. III n. 49883/2019 is the leading case (cross-referenced).",
+    "bytes": 2333
+  },
+  {
+    "slug": "cass-pen-i-5459-2021",
+    "title": "Giurisprudenza di legittimità — donna maltrattata che uccide, legittima difesa putativa (principi Sistema Penale/Battistoni)",
+    "url": "https://www.sistemapenale.it/it/articolo/battistoni-lomicidio-del-coniuge-maltrattante-tra-legittima-difesa-putativa-e-proporzionalita-della-pena-in-astratto",
+    "domain": "legal_doctrine",
+    "authority_hint": "cassazione_semplice",
+    "retrieved_at": "2026-04-23T10:46:00Z",
+    "status": "substituted",
+    "notes": "Cass. pen. Sez. I n. 5459/2021 con quel numero esatto non reperibile su SSR-rendered sources. File riporta principi di diritto consolidati enucleati da R. Battistoni in Sistema Penale su casi reali di legittima difesa putativa per donna maltrattata; actual citation = dottrina Battistoni 2021 che commenta decisione di merito (Corte d'Assise).",
+    "bytes": 3157
+  },
+  {
+    "slug": "cass-pen-i-14987-2017",
+    "title": "Giurisprudenza di legittimità — provocazione coniugale (art. 62 n. 2 c.p.)",
+    "url": "https://www.avvocatocali.it/la-circostanza-attenuante-della-provocazione/",
+    "domain": "legal_case",
+    "authority_hint": "cassazione_semplice",
+    "retrieved_at": "2026-04-23T10:46:00Z",
+    "status": "substituted",
+    "notes": "Cass. pen. Sez. I n. 14987/2017 non reperibile con tale esatto numero. File documenta principi consolidati su provocazione coniugale, con citazioni verbatim di Cass. Sez. V n. 2725/2020 e Cass. Sez. III n. 2702/2011.",
+    "bytes": 2747
+  },
+  {
+    "slug": "cass-pen-v-29527-2022",
+    "title": "Cass. pen. Sez. I n. 12328/2017 — aggravante violenza assistita (art. 61 n. 11-quinquies c.p.)",
+    "url": "https://www.giurisprudenzapenale.com/2017/04/12/una-nota-sullaggravante-della-cd-violenza-assistita-e-sufficiente-che-il-minore-percepisca-il-fatto-di-reato/",
+    "domain": "legal_case",
+    "authority_hint": "cassazione_semplice",
+    "retrieved_at": "2026-04-23T10:46:00Z",
+    "status": "substituted",
+    "notes": "Slug originale Cass. pen. Sez. V n. 29527/2022 non reperibile. Actual citation = Cass. pen. Sez. I n. 12328/2017 (Di Tomassi-Aprile), leading case sulla configurabilità dell'aggravante art. 61 n. 11-quinquies c.p. — stesso oggetto di diritto.",
+    "bytes": 2484
+  },
+  {
+    "slug": "cass-pen-i-12024-2018",
+    "title": "Cass. pen. Sez. VI n. 35667/2025 — ciclo della violenza come massima di esperienza (vittima vulnerabile)",
+    "url": "https://www.sistemapenale.it/it/scheda/torlasco-il-ciclo-della-violenza-come-massima-di-esperienza-per-laccertamento-dei-reati-di-violenza-domestica-una-nuova-pronuncia-della-cassazione",
+    "domain": "legal_case",
+    "authority_hint": "cassazione_semplice",
+    "retrieved_at": "2026-04-23T10:47:00Z",
+    "status": "substituted",
+    "notes": "Slug originale Cass. pen. Sez. I n. 12024/2018 (vittima vulnerabile) non reperibile. Actual citation = Cass. pen. Sez. VI n. 35667/2025 (Ricciarelli-Di Nicola Travaglini), pronuncia più recente che codifica 'ciclo della violenza' come massima di esperienza per accertamento reati contro vittima vulnerabile.",
+    "bytes": 2503
+  },
+  {
+    "slug": "cass-pen-v-18833-2020",
+    "title": "Cass. pen. Sez. V n. 13273/2020 — uxoricidio aggravanti art. 577 c.p.",
+    "url": "https://www.neldiritto.it/appgiurisprudenza.asp?id=18033",
+    "domain": "legal_case",
+    "authority_hint": "cassazione_semplice",
+    "retrieved_at": "2026-04-23T10:47:00Z",
+    "status": "substituted",
+    "notes": "Slug originale Cass. pen. Sez. V n. 18833/2020 non confermata. Actual citation = Cass. pen. Sez. V n. 13273/2020 — stessa sezione, stesso anno, identico oggetto (uxoricidio e aggravante rapporto di coniugio ex art. 577 c.p.). File include anche Cass. Sez. I n. 22338/2021.",
+    "bytes": 2815
+  },
+  {
+    "slug": "cortecost-139-2019",
+    "title": "Quadro costituzionale/Cass. SS.UU. 'Raso' n. 9163/2005 — stati emotivi e imputabilità (art. 90 c.p.)",
+    "url": "https://www.cortecostituzionale.it/actionSchedaPronuncia.do?anno=2019&numero=139",
+    "domain": "legal_doctrine",
+    "authority_hint": "cassazione_ssuu",
+    "retrieved_at": "2026-04-23T10:47:00Z",
+    "status": "substituted",
+    "notes": "Corte Cost. n. 139/2019 verte in realtà su procedimento civile (art. 96, terzo comma, c.p.c.), non su stati emotivi e imputabilità. File sostituisce con principi costituzionali e di legittimità rilevanti (Cass. SS.UU. Raso n. 9163/2005 sui disturbi della personalità e capacità di intendere/volere); stesso tema sostanziale.",
+    "bytes": 2729
+  },
+  {
+    "slug": "cortecost-236-2016",
+    "title": "Corte Cost. sent. n. 236/2016 — proporzionalità della pena",
+    "url": "https://www.cortecostituzionale.it/actionSchedaPronuncia.do?anno=2016&numero=236",
+    "domain": "legal_constitutional",
+    "authority_hint": "constitution_court",
+    "retrieved_at": "2026-04-23T10:48:00Z",
+    "status": "ok",
+    "bytes": 2684
+  },
+  {
+    "slug": "dpc-femminicidio-giuridico",
+    "title": "Diritto Penale Contemporaneo — Il femminicidio come fenomeno giuridico",
+    "url": "https://archiviodpc.dirittopenaleuomo.org/d/3574-violenza-di-genere-e-femminicidio",
+    "domain": "legal_doctrine",
+    "authority_hint": "doctrine",
+    "retrieved_at": "2026-04-23T10:50:00Z",
+    "status": "ok",
+    "notes": "fetched-summary-only; verbatim not available — archivio DPC raggiunto solo parzialmente. File assemblato da più fonti aperte (archiviodpc, Sistema Penale, rapportoantigone, Giappichelli) con principi dottrinali consolidati sul femminicidio come fattispecie penale, compresa la novella 2025 (art. 577-bis c.p.).",
+    "bytes": 5197
+  },
+  {
+    "slug": "istat-violenza-donne",
+    "title": "ISTAT — Rapporto sulla violenza contro le donne",
+    "url": "https://www.istat.it/comunicato-stampa/la-violenza-contro-le-donne-dentro-e-fuori-la-famiglia-primi-risultati-anno-2025/",
+    "domain": "statistical",
+    "authority_hint": "statistical",
+    "retrieved_at": "2026-04-23T10:51:00Z",
+    "status": "ok",
+    "notes": "Dati puntuali della rilevazione ISTAT 2025 sulla violenza contro le donne; file include anche dati 2024 su accessi PS e vittime femminicidio da Min. Interno/DCPC.",
+    "bytes": 3839
+  },
+  {
+    "slug": "comparatistica-abused-spouse-defense",
+    "title": "Abused-spouse defense in Italian criminal law — analisi comparata",
+    "url": "https://www.sistemapenale.it/it/articolo/battistoni-lomicidio-del-coniuge-maltrattante-tra-legittima-difesa-putativa-e-proporzionalita-della-pena-in-astratto",
+    "domain": "legal_doctrine",
+    "authority_hint": "doctrine",
+    "retrieved_at": "2026-04-23T10:52:00Z",
+    "status": "ok",
+    "notes": "Analisi comparata composta da più fonti aperte: Sistema Penale (Battistoni), Questione Giustizia (Di Nicola Travaglini), tesi Unipd e Unito; include richiami verbatim ai casi common law Lavallee (CAN) e Norman (US).",
+    "bytes": 6572
+  },
+  {
+    "slug": "brocardi-577-commento",
+    "title": "Brocardi — Commento all'art. 577 c.p.",
+    "url": "https://www.brocardi.it/codice-penale/libro-secondo/titolo-xii/capo-i/art577.html",
+    "domain": "legal_doctrine",
+    "authority_hint": "doctrine",
+    "retrieved_at": "2026-04-23T10:50:00Z",
+    "status": "ok",
+    "notes": "Commento dottrinale verbatim con oltre 25 massime di Cassazione citate integralmente (premeditazione, mezzi insidiosi, rapporto di coniugio, motivi abietti/futili, crudeltà, questioni di costituzionalità, inclusa la sent. Corte Cost. 197/2023).",
+    "bytes": 10270
+  }
+]
