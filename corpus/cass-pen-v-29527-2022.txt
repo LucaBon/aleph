@@ -1,0 +1,25 @@
+Corte di Cassazione Penale, Sezione I, sentenza 14 marzo 2017, n. 12328 - aggravante della violenza assistita (art. 61 n. 11-quinquies c.p.)
+
+Presidente: Di Tomassi. Relatore: Aprile.
+
+SOSTITUZIONE: in luogo della Cass. pen. Sez. V n. 29527/2022 (non reperibile con tale esatto numero), viene riportata la sentenza Cass. pen. Sez. I n. 12328/2017, leading case sulla configurabilità dell'aggravante di cui all'art. 61 n. 11-quinquies c.p.
+
+PRINCIPIO DI DIRITTO ENUNCIATO:
+
+L'aggravante di cui all'art. 61 n. 11-quinquies c.p. sussiste "tutte le volte che il minore degli anni diciotto percepisca la commissione del reato, anche quando la sua presenza non sia visibile all'autore del reato, se questi, tuttavia, ne abbia la consapevolezza ovvero avrebbe dovuto averla usando l'ordinaria diligenza".
+
+ELEMENTI CENTRALI:
+
+1. La percezione del reato da parte del minore rappresenta il requisito sufficiente, indipendentemente dalla visibilità fisica della sua presenza.
+2. L'autore del reato deve essere consapevole della percezione del minore ovvero avrebbe dovuto esserlo usando l'ordinaria diligenza.
+3. La configurabilità dell'aggravante non richiede l'abitualità della percezione: anche una sola volta è sufficiente purché ricorrano gli altri presupposti.
+
+CONTESTO NORMATIVO:
+
+L'articolo 61, primo comma, numero 11-quinquies, c.p. è stato introdotto dal d.l. 14 agosto 2013, n. 93, convertito con modificazioni dalla legge 15 ottobre 2013, n. 119 (disposizioni urgenti in materia di sicurezza e per il contrasto della violenza di genere), e prevede: "l'avere, nei delitti non colposi contro la vita e l'incolumità individuale e contro la libertà personale, commesso il fatto in presenza o in danno di un minore di anni diciotto ovvero in danno di persona in stato di gravidanza".
+
+GIURISPRUDENZA CONCORRENTE:
+
+Cass. pen. Sez. VI n. 31929/2024 (dep. 5 agosto 2024): "ai fini della configurabilità dell'aggravante della violenza assistita è sufficiente che il minore assista anche ad uno dei fatti che costituiscono la condotta di reato, non essendo necessario che gli atti di violenza posti in essere alla presenza del minore rivestano il carattere dell'abitualità". Non è richiesta una percezione continuativa; basta anche un unico episodio a fondare l'aggravante.
+
+NOTA: substituted (slug originale = cass-pen-v-29527-2022; actual citation = Cass. pen. Sez. I n. 12328/2017); rationale: sostanzialmente stesso tema di diritto ma localizzata fonte SSR-rendered aperta.

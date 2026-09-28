@@ -21,6 +21,24 @@ dependencies = [
     "anthropic>=0.40.0",
 ]
 
+[project.optional-dependencies]
+# P2.3: optional embedding retriever (EmbeddingRetriever in retrieval.py).
+# Install with `pip install aleph-kb[embeddings]`.
+embeddings = [
+    "sentence-transformers>=2.2.0",
+    "numpy>=1.24.0",
+]
+# P2.1: YAML fixtures for MockLLM. JSON fixtures work without any extra
+# dependency; install YAML support with `pip install aleph-kb[yaml]`.
+yaml = [
+    "pyyaml>=6.0",
+]
+# Test suite: property-based invariant tests (tests/test_invariants.py).
+dev = [
+    "pytest>=8.0",
+    "hypothesis>=6.100",
+]
+
 [project.scripts]
 aleph = "aleph.cli:main"
 
@@ -30,3 +48,8 @@ Issues = "https://github.com/your-org/aleph/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aleph"]
+
+[tool.pytest.ini_options]
+# `pytest` alone runs the property suite plus both e2e scripts and the
+# canary benchmark (via tests/test_scripts.py).
+testpaths = ["tests"]

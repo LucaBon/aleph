@@ -1,0 +1,134 @@
+# Roadmap
+
+Aleph's promise: **every answer can be checked quickly and fixed cleanly.**
+
+That promise has two halves with different kinds of evidence:
+
+- **"Fixed cleanly"** is a property of the code. It can be tested exhaustively (invariant tests, canary injection) and can come close to a guarantee.
+- **"Checked quickly"** is a property of people using the tool. It can only be measured with user studies, never guaranteed.
+
+This roadmap came out of an external review (September 2026). Phases are ordered so that cheap, deterministic, credibility-building work lands first.
+
+## Claims we can make today, and claims we can't yet
+
+| Claim | Status | Evidence |
+|---|---|---|
+| Every stored claim's span is a verbatim substring of its source | **Yes** | Enforced at write time (`claim-add`, `ingest._locate_span`) |
+| Removing a source invalidates cached views that cited it | **Yes** | e2e tests; smoke benchmark |
+| No view, concept or disposition survives a retraction (transitively) | **Implemented, not yet verified** | `Store.check_invariants()` + `invariant-check` exist; every deactivation path (remove, supersede, retract, `retracted` disposition) runs one cascade that reopens dependent contradictions. `tests/test_invariants.py` (hypothesis, `pip install -e .[dev]`) passes 1000 examples × 60 steps, plus targeted scenarios. Mutation-checked: disabling revival, reopening or view invalidation makes it fail. `benchmark/canary.py` reports 0 leaks and 0% over-invalidation. Not yet in CI |
+| Alias merges are reversible | **Implemented, not yet verified** | `alias_events` merge log, `alias-undo`, and `alias-add` refuses to overwrite without `--force` and rejects cycles along the whole chain. Covered by property and scenario tests. Not yet in CI |
+| A claim faithfully represents its span (numbers, negation, scope) | **No** | Phase 2: fidelity checker + review queue |
+| The verifier's false-accept / false-reject rates are known | **No** | Phase 2: labeled eval set |
+| Answers surface contradicting evidence they didn't use | **No** | Phase 3 |
+| Reviewers check Aleph answers faster *and* more accurately than RAG answers | **Unmeasured** | Phase 6: seeded-error user study |
+
+"Implemented, not yet verified" becomes **Yes** only when the phase's exit criteria below are met and running in CI. Status last checked against the code on 2026-09-28.
+
+The "83%" figure in earlier READMEs came from a fake-LLM run on six sentences. It is a smoke test of the pipeline, not an accuracy result, and is no longer used as a headline.
+
+## Where the review was already addressed
+
+- Retrieval is not keyword-only: `FTSRetriever` and `EmbeddingRetriever` exist. What's missing is hybrid fusion (Phase 3).
+- Recency auto-resolution is already opt-in (`lint --resolve-by-recency`). It sorts on claim extraction time (`claims.extracted_at`), not source date. That is a bug, fixed in Phase 3.
+- Contradiction detection already blocks by subject. The problem is that the pre-filter sends almost every same-subject pair to the LLM (Phase 3).
+
+## Phases
+
+### Phase 0: Honest framing
+- README reframed around auditability and reversibility; benchmark labelled as a smoke test.
+- **Test prerequisites** (Phase 1 needs these):
+  - a `dev` extra in `pyproject.toml` with `pytest` and `hypothesis` (done);
+  - remove the hardcoded `/home/claude/aleph/...` paths from `tests/e2e_fake_llm.py` (done: none remain);
+  - one command that runs both e2e scripts plus the pytest suite (done: `pytest` runs the property suite, both e2e scripts and the canary benchmark via `tests/test_scripts.py`);
+  - CI that runs that command (written: `.github/workflows/ci.yml` runs `pytest` under the `thorough` profile on Python 3.10/3.12/3.14; the repo has no remote yet, so it has never run).
+- **Schema versioning** (done): a read-only `schema_version` config key and the numbered `MIGRATIONS` list in `db.py`. SCHEMA + `_run_alters` define version 1; an unversioned store is stamped 1, and a store from a newer aleph is refused (`schema_too_new`). `_run_alters` is still fine for adding columns, but Phase 2 (`proposition`) and Phase 4 (`features`) change what existing rows mean and go through `MIGRATIONS`.
+
+**Exit criteria:** a fresh clone passes the full test command with no path edits, and CI runs it on every push.
+
+### Phase 1: "Fixed cleanly" as a tested guarantee
+- `Store.check_invariants()` and the `invariant-check` agent command. The invariant: no active view, active/attested concept or resolved contradiction depends on a retracted, superseded or removed claim.
+- Property-based tests (hypothesis) over random operation sequences.
+- Reopen dispositioned contradictions when a claim they rest on is retracted, superseded or removed.
+- Alias merge log, `alias-undo`, and no silent alias overwrite.
+- Canary leakage benchmark (`benchmark/canary.py`), including the over-invalidation rate.
+
+**Status:** implemented. The thorough property profile and the canary benchmark pass locally, but neither has run in CI yet. `invariant-check` returns no violations on the `corpus/` store (25 sources, 198 claims, 5 `distinguish` resolutions, 12 aliases, 8 draft concepts), and still none after removing each of its 25 sources in turn (checked 2026-09-28).
+
+Two pre-existing alias bugs were found by the property test and fixed:
+- merging into a subject that was itself an alias left claims under a non-canonical subject;
+- overwriting an alias could create a resolution cycle.
+
+`remove_source` no longer fails the `superseded_by` foreign key when another source's claim was superseded by one of its claims.
+
+**Exit criteria:**
+- `tests/test_invariants.py` passes under the `thorough` profile (1000 examples × 60 steps) in CI.
+- The canary benchmark shows 0% leakage (no view, concept or disposition that reaches a canary claim survives its removal or retraction) and reports the over-invalidation rate.
+- `invariant-check` returns no violations on the benchmark store and on a store built from `corpus/`.
+
+### Phase 2: Claim fidelity and a graded verifier
+- A `proposition` field and a context window on claims; the triple becomes an index.
+- Deterministic fidelity checker: numbers, dates, units, negations and entities must appear in the span or its context.
+- A review queue for claims, contradictions, aliases and concepts.
+- A layered verifier (deterministic → entailment → LLM) with SUPPORTED / UNSUPPORTED / UNCERTAIN verdicts.
+- A human-labeled verifier eval set (200–300 pairs) with published false-accept and false-reject rates.
+
+**Order within the phase:** build the eval set first and measure the current verifier on it, so the layered verifier is judged against a real baseline.
+
+**Exit criteria:**
+- Baseline and new false-accept / false-reject rates are published.
+- The layered verifier's false-accept rate is lower than the baseline's, and its false-reject rate isn't worse.
+- The fidelity checker flags every seeded number, date, negation or entity mismatch in a fixture set.
+- Ingest reports its LLM cost per 1k source tokens, so the cost of extraction is known before Phase 6.
+
+### Phase 3: Omission-aware retrieval and scalable contradictions
+- Hybrid FTS + embedding retrieval (RRF).
+- Contradiction- and condition-aware expansion; unresolved conflicts shown to the synthesizer.
+- `claim_ids_unused` ("evidence considered but not used").
+- A counter-evidence check on the final answer.
+- Predicate blocking, a stricter pre-filter, and review-queue routing for detected contradictions.
+- Recency resolution by source date; legal-domain sources ranked by authority.
+
+**Exit criteria:**
+- Hybrid retrieval beats both FTS-only and embedding-only on claim recall@k over a labeled query set.
+- The contradiction pre-filter cuts LLM pair judgements by a measured factor on `corpus/` without losing any contradiction in a hand-labeled sample.
+- `lint --resolve-by-recency` orders by source date, with a test.
+
+The contradiction-scaling work is conditional on Phase 4 keeping contradictions in, or close to, the core (see Sequencing notes).
+
+### Phase 4: Minimal core with optional extensions
+- A `features` store config. The core is sources, claims, views and the cascade; concepts, conditions, contradictions and authority become opt-in.
+- Concepts are decomposed into atomic sub-statements, each grounded by a single span, labelled as synthesis, and not citable in core mode.
+
+**Exit criteria:**
+- With every extension off, the full test suite passes against the core schema.
+- Turning an extension on for an existing store is a tested migration.
+- `invariant-check` stays clean in both modes.
+
+### Phase 5: Interfaces
+- A curated Python API, an MCP server (`aleph mcp`), and a local review UI (click-to-span, mark-wrong, review queue).
+- PDF ingestion that keeps the verbatim-span contract. Hyphenation, column order and running headers must not break span location. Real legal and scientific corpora are mostly PDFs; ingest reads only `.txt/.md` today.
+
+**Exit criteria:**
+- The review UI supports the Phase 6 seeded-error study end to end: show an answer, click to its span, mark a sentence wrong, log timing.
+- The MCP server exposes the agent-mode surface with the same JSON envelope.
+
+### Phase 6: Evaluation program
+- **Code properties:** invariants, canary leakage, over-invalidation, regeneration churn, root-cause localization.
+- **Measured results:** attribution on ALCE/QASPER against chunk-cited RAG; retraction leakage against a summary-caching wiki; contradiction discovery; cost and scale at 10k and 100k claims.
+- **User studies:** seeded-error review (speed × detection), automation bias, span sufficiency, residual error among unflagged sentences.
+
+**Exit criteria:** each measured result and user study has a pre-registered hypothesis and a published result, including null results. Those results decide the Deferred items.
+
+### Deferred
+- Lazy, per-chunk extraction; widening the concept, condition and disposition machinery. Only if Phase 6 shows these add value.
+
+## Sequencing notes
+
+Phases are mostly sequential. Two pieces of evaluation should run earlier than Phase 6, because later phases depend on what they find:
+
+1. **Verifier baseline** runs at the start of Phase 2 (see above).
+2. **A rough RAG attribution comparison**, using a small ALCE or QASPER slice against chunk-cited RAG, runs after Phase 2 and before Phase 5. If Aleph doesn't beat chunk-cited RAG on attribution, the interface work in Phase 5 should wait.
+
+**Decide the Phase 4 core before the Phase 3 contradiction work.** Phase 3 scales contradiction detection. Phase 4 may make contradictions opt-in, and Deferred makes their expansion depend on Phase 6. Decide what the core is (the `features` split) before scaling any extension. Until then, limit Phase 3 contradiction work to what the evaluation needs.
+
+**Planning docs.** This file is the authoritative plan. `docs/backlog.md` and `docs/improvement-proposals.md` are input to it. A backlog item isn't scheduled until it's mapped to a phase here.

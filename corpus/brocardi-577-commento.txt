@@ -1,0 +1,85 @@
+Brocardi.it — Commento all'articolo 577 del Codice Penale
+
+RATIO LEGIS:
+
+Il legislatore italiano ha preferito indicare differenti circostanze aggravanti, piuttosto che predisporre diverse fattispecie di omicidio.
+
+SPIEGAZIONE:
+
+La norma prevede una serie di circostanze aggravanti speciali per il delitto di omicidio. Il comma 1 disciplina pluralità di circostanze autonome e stabilisce l'applicazione della pena dell'ergastolo nei casi elencati.
+
+Aggravanti che comportano ergastolo (comma 1):
+
+N. 1: Aggravamento in virtù del rapporto di parentela tra l'omicida e la vittima. Il delitto viene punito con ergastolo quando commesso contro un ascendente o discendente (anche adottivo), il coniuge (anche se legalmente separato), chi sia legato all'autore da unione civile o da stabile convivenza o relazione affettiva. Diversamente dall'art. 576, non è richiesto che la condotta sia per motivi abbietti o futili, né che l'agente abbia fatto ricorso a sevizie, crudeltà, mezzi venefici, insidiosi o premeditazione.
+
+N. 2: Si applica ergastolo se l'omicidio è realizzato col mezzo di sostanze venefiche o con mezzo insidioso. Le sostanze venefiche sono quelle tossiche e pericolose per la vita; il mezzo insidioso è quello caratterizzato da natura ingannevole che sorprende la vittima o ne complica la difesa.
+
+N. 3: La pena dell'ergastolo va applicata quando il delitto è commesso con premeditazione. Secondo le Sezioni Unite della Cassazione (Cass., SS.UU., n. 337 del 2009), la premeditazione sussiste con due presupposti: l'elemento cronologico consiste nell'apprezzabile lasso di tempo tra la comparsa del proposito criminoso e la sua concreta attuazione; l'elemento psicologico consiste nella ferma e irrevocabile volontà nell'animo del soggetto.
+
+N. 4: L'omicidio è punito con ergastolo quando realizzato con il concorso di talune circostanze indicate nei numeri 1 e 4 dell'art. 61 c.p. (aver agito per motivi abietti o futili e aver adoperato sevizie o crudeltà).
+
+Pena ridotta (comma 2):
+
+Il comma 2 stabilisce la reclusione da 24 a 30 anni (non ergastolo) per commissione del delitto contro il coniuge divorziato, chi è legato da unione civile cessata o stabile convivenza/relazione affettiva cessate, fratello o sorella, adottante o adottato (nei casi di adozione di maggiorenni), padre o madre adottivi, figlio adottivo, o affine in linea retta.
+
+Limite al bilanciamento (comma 3):
+
+Il comma 3 (inserito dalla L. n. 69 del 2019) pone un divieto di prevalenza delle circostanze attenuanti con le aggravanti previste per l'omicidio realizzato in ambito familiare o parafamiliare. Tuttavia, questo non trova applicazione riguardo alle circostanze di cui all'art. 89 c.p. (seminfermità), art. 98 c.p. (minore età), art. 114 c.p. (contributo di minima importanza) e al n. 1 dell'art. 62 c.p. (motivi di particolare valore morale o sociale).
+
+PRONUNCIA DI INCOSTITUZIONALITÀ:
+
+La Corte costituzionale (sent. n. 197 del 2023) ha dichiarato l'incostituzionalità del comma 3 nella parte in cui vieta al giudice di ritenere prevalenti l'attenuante della "provocazione" (n. 2 comma 1 dell'art. 62 c.p.) e le attenuanti generiche ex art. 62 bis c.p. Tale divieto contrasta con l'art. 3 e l'art. 27 della Costituzione (principi di parità di trattamento, proporzionalità e individualizzazione della pena) poiché si applicherebbero pene manifestamente eccessive in ipotesi dove, nel contesto familiare, la vittima di ripetuti comportamenti aggressivi commette l'omicidio per esasperazione da situazione intollerabile.
+
+GIURISPRUDENZA DELLA CASSAZIONE:
+
+Sulla premeditazione:
+
+Cass. SS.UU. n. 337/2009: Elementi costitutivi della premeditazione sono un apprezzabile intervallo temporale tra l'insorgenza del proposito criminoso e l'attuazione, tale da consentire ponderata riflessione circa l'opportunità del recesso (elemento cronologico), e la ferma risoluzione criminosa perdurante senza soluzioni di continuità nell'animo dell'agente fino alla commissione del crimine (elemento ideologico).
+
+Cass. n. 42576/2015: La premeditazione è esclusa solo quando l'occasionalità del momento di consumazione appaia preponderante.
+
+Cass. n. 48852/2023: La premeditazione, oggetto di prova, può essere dimostrata con ricorso alla prova logica sulla scorta degli indizi ricavabili dalle modalità del fatto, circostanze di tempo e luogo, concorso di più persone con ripartizione dei ruoli e natura del movente.
+
+Cass. n. 29013/2021: La circostanza aggravante soggettiva della premeditazione è compatibile con il dolo alternativo.
+
+Sui mezzi insidiosi e venefici:
+
+Cass. n. 39762/2021: La circostanza aggravante dell'uso del mezzo insidioso, al pari di quella dell'uso di sostanze venefiche, ricorre soltanto quando esso provochi direttamente la morte e non anche quando costituisca una mera modalità dell'azione.
+
+Cass. n. 29921/2002: L'espressione "mezzo insidioso" indica quello che, per la sua natura ingannevole o per il modo e le circostanze che ne accompagnano l'uso, reca in sé un pericolo nascosto, tale da sorprendere l'attenzione della vittima e rendere alla stessa impossibile, o comunque più difficile che di fronte ad ogni altro mezzo, la difesa.
+
+Sul rapporto di parentela e coniugio:
+
+Cass. n. 3686/2023: L'aggravante dell'aver commesso il fatto in danno di persona legata all'agente da relazione affettiva e con esso stabilmente convivente trova applicazione quando sussista, in concreto, fra i soggetti una prossimità affettiva e una duratura comunanza di vita, con legami di reciproca assistenza e protezione o comunque una stabile condivisione dell'abitazione, non dovendo necessariamente ricorrere l'ipotesi disciplinata dalla legge 20 maggio 2016, n. 76.
+
+Cass. n. 29849/2025: L'aggravante della "stabile convivenza" si applica indipendentemente dalla qualità del rapporto affettivo tra l'aggressore e la vittima. È sufficiente la condivisione materiale degli spazi abitativi fino al momento del delitto per configurare l'aggravante, anche se la comunanza emotiva e spirituale sia cessata.
+
+Cass. n. 21525/2025: L'aggravante comune della coabitazione (art. 61, comma primo, n. 11) concorre con quella speciale del rapporto di coniugio (art. 577, comma primo, n. 1), poiché la prima ha natura oggettiva e guarda alla relazione di fatto tra vittima e agente che agevola la commissione del delitto, mentre la seconda ha natura soggettiva e considera il vincolo coniugale in quanto tale.
+
+Cass. n. 42462/2006: Ai fini della configurabilità dell'aggravante del rapporto di "coniugio", è ininfluente l'eventuale sussistenza del regime di separazione legale fra i due coniugi, regime che attenua il complesso degli obblighi nascenti dal matrimonio, eliminando quello della coabitazione, ma non toglie lo status di coniuge, status che si perde solo con lo scioglimento del matrimonio.
+
+Su motivi abietti e futili:
+
+Cass. n. 1411/1997: È configurabile la circostanza aggravante del motivo futile nel caso di omicidio commesso come reazione immediata anche ad espressioni minacciose della vittima quando tali espressioni, per il contesto e per la personalità del soggetto dal quale provengono, non presentino alcuna reale efficacia intimidatrice ma si appalesino come manifestazione meramente verbale di generica ostilità.
+
+Cass. n. 7034/1996: Costituisce motivo futile la determinazione criminosa che trova origine in uno stimolo tanto lieve, quanto sproporzionato, da prospettarsi più come un pretesto che una causa scatenante della condotta antigiuridica. La peculiare caratteristica del motivo futile è data dalla enorme sproporzione tra il motivo e l'azione delittuosa.
+
+Cass. n. 4023/1996: Non può considerarsi aggravato da motivi abietti o futili un omicidio al quale l'agente sia stato spinto dall'intento di recuperare la propria libertà sentimentale, onde coltivare senza intralci una relazione con altra persona, gravemente ostacolata dalla vittima.
+
+Sulla crudeltà e sevizie:
+
+Cass. n. 2586/1998: La premeditazione va distinta dalle sevizie e dalla crudeltà. La premeditazione consiste in una particolare intensità del dolo; la crudeltà rivela invece una particolare qualità dell'animo del delinquente.
+
+Sulla comunicazione dell'aggravante al concorrente:
+
+Cass. n. 6775/2005: La natura soggettiva della circostanza aggravante prevista per il delitto di omicidio (aver commesso il fatto per motivi abietti o futili ovvero adoperando sevizie o agendo con crudeltà) non preclude la sua estensione al concorrente che, con il proprio volontario contributo, abbia dato adesione alla realizzazione dell'evento.
+
+Cass. n. 297/1992: Le circostanze aggravanti previste dall'art. 577, primo comma, n. 1, seppure soggettive, se conosciute o ignorate per colpa, si comunicano al concorrente. I rapporti tra colpevole e offeso qualificano il delitto in termini di gravità poiché la coscienza etica comune ne ha sempre avvertito la maggiore rimproverabilità, non solo in considerazione del rapporto che lega offensore e offeso, ma perché l'omicidio offende i valori etico-sociali tutelati dagli artt. 29 e 30 della Costituzione.
+
+Questioni di costituzionalità:
+
+Cass. n. 20870/2025: È manifestamente infondata la questione di legittimità costituzionale dell'art. 577, comma primo, n. 1, in relazione all'art. 3 Cost., nella parte in cui prevede per l'omicidio del coniuge non divorziato la pena predeterminata dell'ergastolo pur quando sia acquisita la prova della sostanziale cessazione del vincolo coniugale.
+
+Cass. n. 3868/2024: È manifestamente infondata la questione di legittimità costituzionale dell'art. 577, comma primo, n. 1, in relazione agli artt. 3 e 27, commi 1 e 3, Cost., nella parte in cui è prevista la pena predeterminata dell'ergastolo, poiché la scelta di politica criminale del legislatore non è irragionevole o arbitraria.
+
+Cass. n. 12040/2023: È manifestamente infondata la questione di legittimità costituzionale dell'art. 577, comma primo, n. 4, per contrasto con gli artt. 3 e 27, comma terzo, Cost., nella parte in cui prevede la pena dell'ergastolo indifferentemente al caso sussistano una sola o entrambe le circostanze, costituendo una ragionevole scelta di politica criminale, giustificata dalla possibile mitigazione del trattamento sanzionatorio con il giudizio di bilanciamento.

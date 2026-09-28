@@ -1,0 +1,54 @@
+Abused-spouse defense nel diritto penale italiano — analisi comparata
+
+FONTI: sintesi dottrinale composta a partire da R. Battistoni, "L'omicidio del coniuge maltrattante: tra legittima difesa (putativa) e proporzionalità della pena in astratto" (Sistema Penale); P. Di Nicola Travaglini, "Il diritto penale non è un diritto per le donne: il caso della legittima difesa" (Questione Giustizia); tesi di laurea unipd.it "Legittima difesa: evoluzioni storiche, caratteristiche, limiti e riscontri nel caso della 'sindrome della donna maltrattata'"; tesi unito.it "La legittima difesa. Aspetti problematici in contesti di violenza domestica".
+
+L'ISTITUTO COMPARATO:
+
+La "Battered Woman Syndrome" (BWS) è stata introdotta nel 1970 dalla psicologa americana Lenore E. Walker. Essa descrive la condizione psicologica di una donna vittima di violenza domestica reiterata che si caratterizza per apprendimento dell'impotenza, fasi cicliche di violenza e "luna di miele", compromissione delle capacità di valutazione del pericolo.
+
+Nei sistemi di common law (USA, Canada, Australia, UK), la BWS è stata progressivamente accettata come elemento di prova a supporto della "self-defense" e della "diminished responsibility", talvolta codificata esplicitamente nelle leggi statali (es. California Penal Code §1107, Canadian Criminal Code s. 34 come interpretato da R. v. Lavallee [1990] 1 S.C.R. 852).
+
+Caso seminale canadese: R. v. Lavallee (1990) — la Supreme Court of Canada ha riconosciuto che la testimonianza esperta sulla BWS è ammissibile per valutare la ragionevolezza della percezione di pericolo imminente da parte di una donna vittima di violenza reiterata. La sentenza ha superato lo standard della "imminence" rigidamente interpretato.
+
+Caso statunitense: State v. Norman (N.C. 1989) — la North Carolina Supreme Court rifiuta il riconoscimento della self-defense per una donna che uccide il marito addormentato dopo 20 anni di abusi, per difetto di "imminence" del pericolo. Il caso è paradigmatico della tensione tra rigidità formale dei requisiti della legittima difesa e realtà ciclica della violenza domestica.
+
+IL QUADRO ITALIANO:
+
+In Italia, una storia di maltrattamenti prolungati e abusi domestici non giustifica di per sé l'uccisione dell'aggressore a meno che non ricorrano i requisiti previsti dall'art. 52 c.p. per la legittima difesa. Il requisito dell'attualità del pericolo ("pericolo attuale di un'offesa ingiusta") rappresenta un ostacolo effettivo a ricondurre la condotta della donna maltrattata entro lo scopo della legittima difesa.
+
+REQUISITI EX ART. 52 C.P. E LORO ADATTAMENTO:
+
+1. Necessità di difendere un diritto proprio od altrui: pacificamente soddisfatto (la vita della donna è diritto primario costituzionalmente tutelato ex art. 2 Cost.).
+
+2. Pericolo attuale di un'offesa ingiusta: in una lettura restrittiva del termine "attuale" (= imminente), la donna che uccide il marito addormentato o durante una fase di "luna di miele" del ciclo della violenza non potrebbe invocare la scriminante. In una lettura evolutiva, il "pericolo attuale" va valutato tenendo conto della struttura ciclica e cumulativa del maltrattamento.
+
+3. Proporzionalità della difesa rispetto all'offesa: la giurisprudenza valuta la proporzione tra mezzi di aggressione e mezzi di difesa, ma anche tra beni in conflitto. Nei casi di uxoricidio della donna maltrattata, l'uso di arma letale contro aggressore disarmato o inabile può far venire meno la proporzionalità.
+
+LA LEGITTIMA DIFESA PUTATIVA (art. 59, quarto comma, c.p. in combinato disposto con art. 52 c.p.):
+
+La giurisprudenza italiana ha progressivamente aperto spazio alla legittima difesa putativa in questi contesti. Riconoscimento della "condizione psicologica dell'imputata, maturata negli anni di maltrattamenti", idonea a fondare un errore incolpevole sulla sussistenza del pericolo attuale.
+
+Archiviazione GIP Tivoli (Sistema Penale 2021): caso di donna vittima di maltrattamenti che colpisce con coltello il coniuge durante una lite — archiviazione per legittima difesa/eccesso colposo scusato, con riconoscimento rilevante del contesto di maltrattamento pregresso.
+
+Caso Genova (ripreso da "Il Post", 27 febbraio 2020): donna assolta per legittima difesa dopo aver ucciso con coltellate il marito violento, previa denuncia per maltrattamenti e lesioni — la donna era riuscita a disarmare il marito che la minacciava di morte con un coltello in mano.
+
+L'ECCESSO COLPOSO EX ART. 55 C.P. E LA CLAUSOLA DI ESCLUSIONE DELLA PUNIBILITÀ (post L. 36/2019):
+
+L'art. 55, comma 2, c.p. (introdotto dalla L. 36/2019) esclude la punibilità dell'eccesso colposo nella difesa legittima domiciliare quando il soggetto "ha agito nelle condizioni di cui all'articolo 61, primo comma, n. 5), ovvero in stato di grave turbamento, derivante dalla situazione di pericolo in atto".
+
+La Cassazione (Sez. III n. 49883/2019) ha precisato che tale previsione "non ha codificato un'ulteriore scriminante, che si aggiunge a quelle previste dagli artt. 50 ss. c.p.", ma opera sul piano della colpevolezza/punibilità.
+
+PROPORZIONALITÀ DELLA PENA — ART. 577 C.P.:
+
+Il principale ostacolo dell'ordinamento italiano — rispetto a modelli common law — è la rigidità della cornice edittale dell'ergastolo per l'omicidio aggravato ex art. 577 c.p. quando la vittima sia il coniuge. Corte Cost. sent. 197/2023 ha dichiarato l'incostituzionalità del divieto di prevalenza dell'attenuante della provocazione e delle attenuanti generiche ex art. 62-bis c.p. rispetto all'aggravante familiare, proprio per consentire al giudice di graduare la pena in funzione dell'esasperazione da situazione intollerabile subita dalla vittima poi uccisore.
+
+CONFRONTO STRUTTURALE:
+
+| Profilo | Italia | Common Law |
+| ------- | ------ | ---------- |
+| Riconoscimento BWS | Non codificato; ingresso via perizia tecnica e legittima difesa putativa | Codificato in varie giurisdizioni; testimonianza esperta ammissibile |
+| Attualità del pericolo | Criterio rigido; apertura via "pericolo attuale valutato in contesto ciclico" | Stretching del requisito "imminence"; Lavallee |
+| Diminished responsibility | Vizio parziale di mente ex art. 89 c.p., difficile | Disponibile e usata |
+| Uxoricidio: pena | Ergastolo ex art. 577 c.p., ora con possibile bilanciamento dopo Corte Cost. 197/2023 | Prison sentence graduabile, con attenuanti BWS |
+
+NOTA: fetched-summary-only; verbatim not available (analisi comparata composta da più fonti dottrinali italiane aperte; i casi di common law sono citazioni testuali standard).

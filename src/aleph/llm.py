@@ -2,14 +2,23 @@
 
 The interface is just two functions: `complete` (prose) and `complete_json` (structured).
 If you want OpenAI or a local model, rewrite this file only.
+
+A deterministic :class:`MockLLM` adapter (P2.1) is also provided here for
+tests and offline CI. It reads a fixtures file mapping
+``(system_prompt_hash, user_prompt_hash)`` to a canned response, so the
+full pipeline (ingest, ask, verifier, contradiction-scan,
+concept-validate, …) can exercise its golden paths without a live API
+key.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
 import re
 import time
+from pathlib import Path
 from typing import Optional
 
 try:
@@ -137,3 +146,151 @@ def _parse_json(text: str) -> list | dict:
             except json.JSONDecodeError:
                 continue
         raise ValueError(f"Could not parse JSON: {text[:200]}")
+
+
+# ---------------------------------------------------------------------------
+# MockLLM (P2.1)
+#
+# A deterministic, API-key-free adapter for CI and developer smoke tests.
+# Fixtures are keyed by (sha256 of system prompt, sha256 of user prompt);
+# misses fall back to any configured ``default`` entry, then to a
+# contract-preserving stub. ``complete_json`` returns parsed JSON like the
+# real adapter does.
+#
+# Fixture file format (JSON or YAML):
+#
+#   [
+#     {
+#       "match": {
+#         "system_contains": "You extract atomic claims",
+#         "user_contains": "tesla"
+#       },
+#       "response": "<string OR object — object serializes to JSON>"
+#     },
+#     {
+#       "match": {
+#         "system_hash": "<sha256 hex>",
+#         "user_hash":  "<sha256 hex>"
+#       },
+#       "response": {...}
+#     }
+#   ]
+#
+# Two equivalent matcher styles are supported so hand-authored fixtures can
+# use substring matching (readable) while recorded fixtures can pin exact
+# hashes (airtight).
+# ---------------------------------------------------------------------------
+
+
+def _sha256(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+class MockLLM:
+    """Deterministic offline LLM adapter driven by a fixtures file.
+
+    Accepts the same two methods as :class:`LLM`. Loads fixtures from the
+    path passed to the constructor (YAML or JSON; YAML requires PyYAML).
+    """
+
+    def __init__(self, fixtures_path: str | os.PathLike, model: str = "mock"):
+        self.model = model
+        self.calls = 0
+        self.fixtures_path = Path(fixtures_path)
+        self._fixtures: list[dict] = self._load(self.fixtures_path)
+        # Keep the same surface as LLM so callers can't tell the difference
+        # when they only touch .complete / .complete_json.
+        self.max_attempts = 1
+        self.backoff_base = 0.0
+
+    @staticmethod
+    def _load(path: Path) -> list[dict]:
+        if not path.is_file():
+            raise FileNotFoundError(f"MockLLM fixtures not found: {path}")
+        raw = path.read_text(encoding="utf-8")
+        if path.suffix.lower() in (".yaml", ".yml"):
+            try:
+                import yaml  # type: ignore
+            except ImportError as e:
+                raise RuntimeError(
+                    "MockLLM YAML fixtures require PyYAML "
+                    "(`pip install pyyaml`); use .json instead"
+                ) from e
+            data = yaml.safe_load(raw)
+        else:
+            data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError(
+                f"MockLLM fixtures must be a list at top level, got "
+                f"{type(data).__name__}"
+            )
+        return data
+
+    def _match(self, system: str, user: str) -> Optional[dict]:
+        """Find the first fixture whose ``match`` block is satisfied."""
+        s_hash = _sha256(system)
+        u_hash = _sha256(user)
+        default: Optional[dict] = None
+        for entry in self._fixtures:
+            match = entry.get("match") or {}
+            if match.get("default"):
+                default = entry
+                continue
+            sh = match.get("system_hash")
+            uh = match.get("user_hash")
+            if sh and sh != s_hash:
+                continue
+            if uh and uh != u_hash:
+                continue
+            sc = match.get("system_contains")
+            uc = match.get("user_contains")
+            if sc and sc not in system:
+                continue
+            if uc and uc not in user:
+                continue
+            return entry
+        return default
+
+    def complete(self, system: str, user: str, max_tokens: int = 2048) -> str:
+        self.calls += 1
+        entry = self._match(system, user)
+        if entry is None:
+            log("mockllm_miss", level="warning",
+                system_hash=_sha256(system), user_hash=_sha256(user))
+            # Contract-preserving stub: UNKNOWN for prose, empty JSON
+            # structure for complete_json's re-parse path.
+            return "UNKNOWN"
+        resp = entry.get("response")
+        if isinstance(resp, str):
+            return resp
+        return json.dumps(resp, ensure_ascii=False)
+
+    def complete_json(
+        self, system: str, user: str, max_tokens: int = 4096,
+    ) -> list | dict:
+        self.calls += 1
+        entry = self._match(system, user)
+        if entry is None:
+            log("mockllm_miss_json", level="warning",
+                system_hash=_sha256(system), user_hash=_sha256(user))
+            # UNGROUNDED-safe empty default: empty list is accepted by
+            # extractors and detectors as "no items found".
+            return []
+        resp = entry.get("response")
+        if isinstance(resp, (list, dict)):
+            return resp
+        if isinstance(resp, str):
+            return _parse_json(resp)
+        raise ValueError(
+            f"MockLLM fixture response must be str/list/dict, got "
+            f"{type(resp).__name__}"
+        )
+
+
+def from_env(model: Optional[str] = None) -> "LLM | MockLLM":
+    """Construct an LLM from environment: honours ``ALEPH_LLM_FIXTURES`` so
+    that setting it swaps in the MockLLM transparently for every caller."""
+    fixtures = os.environ.get("ALEPH_LLM_FIXTURES")
+    if fixtures:
+        return MockLLM(fixtures)
+    return LLM(model=model or DEFAULT_MODEL)
