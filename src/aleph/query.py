@@ -9,14 +9,13 @@ grouping, concept citation verification, SYNTHESIZE_V2 prompt.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .db import Store
+from .db import Store, view_cache_key
 from .llm import LLM
 from .log import log
 from .retrieval import Retriever, default_retriever
@@ -404,6 +403,15 @@ class _DictRow:
 # Filtering
 # ---------------------------------------------------------------------------
 
+def _search(retr, keywords: list[str], limit: int,
+            context: Optional[dict]) -> list:
+    """Run the retriever, asking for retracted claims too when the context
+    sets ``include_retracted`` (otherwise they never reach the filter)."""
+    if context and context.get("include_retracted"):
+        return retr.search(keywords, limit=limit, include_retracted=True)
+    return retr.search(keywords, limit=limit)
+
+
 def _filter_claims_by_context(
     store: Store, claim_rows: list, context: Optional[dict],
 ) -> list:
@@ -584,9 +592,7 @@ def _group_by_disposition(store: Store, claim_rows: list) -> dict:
 # ---------------------------------------------------------------------------
 
 def _compute_cache_hash(question: str, context: Optional[dict]) -> str:
-    """sha256 of question.strip().lower() + '||' + json.dumps(context or {}, sort_keys=True)."""
-    raw = question.strip().lower() + "||" + json.dumps(context or {}, sort_keys=True)
-    return hashlib.sha256(raw.encode()).hexdigest()
+    return view_cache_key(question, context)
 
 
 def _get_cached_view(store: Store, query_hash: str):
@@ -659,7 +665,7 @@ def query(
     # 1. retrieve candidate claims
     keywords = _extract_keywords(question)
     retr = retriever if retriever is not None else default_retriever(store)
-    claim_rows = retr.search(keywords, limit=retrieve_k)
+    claim_rows = _search(retr, keywords, retrieve_k, context)
     if not claim_rows:
         return QueryResult(
             query=question,

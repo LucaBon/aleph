@@ -10,6 +10,7 @@ dispatch substring.
 from __future__ import annotations
 
 from .db import Store
+from .log import log
 from .llm import LLM
 from .contradictions import detect_all, dispose
 
@@ -63,13 +64,11 @@ def resolve_by_recency(store: Store) -> int:
         try:
             dispose(store, row["id"], "supersede",
                     keep=newer["id"], drop=older["id"])
-        except ValueError:
-            # fallback: if dispose fails (e.g. already resolved), use legacy path
-            store.supersede_claim(older["id"], newer["id"])
-            with store.tx() as cx:
-                cx.execute(
-                    "UPDATE contradictions SET status = 'resolved', resolved_to = ? WHERE id = ?",
-                    (newer["id"], row["id"]),
-                )
+        except ValueError as e:
+            # dispose refuses pairs it can't resolve soundly (e.g. a member
+            # is no longer active). Leave those open rather than force them.
+            log("resolve_by_recency_skipped", level="info",
+                contradiction_id=row["id"], reason=str(e))
+            continue
         resolved += 1
     return resolved

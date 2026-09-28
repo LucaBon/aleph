@@ -146,24 +146,15 @@ def cmd_source_replace(args, store: Store) -> int:
         _err("not_a_file", f"not a file: {path}", path=str(path))
         return 1
     text = path.read_text(encoding="utf-8", errors="replace")
-    old_rows = store.conn.execute(
-        "SELECT id FROM sources WHERE path = ?", (str(path),)
-    ).fetchall()
-    old_ids = [r["id"] for r in old_rows]
-    removed_claims = 0
-    for sid in old_ids:
-        removed_claims += store.conn.execute(
-            "SELECT COUNT(*) FROM claims WHERE source_id = ?", (sid,)
-        ).fetchone()[0]
-        store.remove_source(sid)
-    new_id = store.add_source(str(path), text)
-    _ok({
-        "status": "replaced" if old_ids else "ingested",
-        "old_source_ids": old_ids,
-        "old_claims_removed": removed_claims,
-        "source_id": new_id,
-        "length": len(text),
-    })
+    try:
+        result = store.replace_source(str(path), text)
+    except ValueError as e:
+        other = int(str(e).split(":", 1)[1])
+        _err("duplicate_content",
+             f"content is identical to source {other}; nothing was replaced",
+             path=str(path), existing_source_id=other)
+        return 1
+    _ok({**result, "length": len(text)})
     return 0
 
 
@@ -1422,6 +1413,9 @@ def cmd_source_authority_set(args, store: Store) -> int:
         return 1
 
     result = authority.set_metadata(store, args.source_id, args.domain, metadata)
+    if "error" in result:
+        _err(result["error"], result["message"], source_id=args.source_id)
+        return 1
     _ok(result)
     return 0
 
@@ -1743,6 +1737,7 @@ def cmd_compose(args, store: Store) -> int:
         _extract_keywords,
         _filter_claims_by_context,
         _group_by_disposition,
+        _search,
         _retrieve_concepts,
     )
     from .retrieval import default_retriever
@@ -1768,7 +1763,7 @@ def cmd_compose(args, store: Store) -> int:
 
     keywords = _extract_keywords(args.query)
     retriever = default_retriever(store)
-    claim_rows = retriever.search(keywords, limit=args.k)
+    claim_rows = _search(retriever, keywords, args.k, ctx)
     claim_rows = _filter_claims_by_context(store, claim_rows, ctx)
 
     # Concept retrieval: active + attested both count as citeable.

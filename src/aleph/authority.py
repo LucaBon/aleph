@@ -9,6 +9,7 @@ Helpers here only validate and rank, never invent.
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -224,6 +225,9 @@ def is_effective_at(meta: dict, when: float) -> bool:
 
 # ----- persistence helpers -----
 
+_RETRACTION_FIELDS = ("retracted", "retracted_at", "retraction_reason")
+
+
 def set_metadata(
     store: Store, source_id: int, domain: str, metadata: dict,
 ) -> dict:
@@ -232,6 +236,26 @@ def set_metadata(
     'warnings': [...]}. If domain is unknown, returns validation error for
     domain without writing."""
     errors = validate_metadata(domain, metadata)
+
+    # Retraction state changes only through retract_source / unretract_source,
+    # which run the claim cascade. Omitting the retraction fields on a
+    # retracted source carries them over; contradicting them is refused.
+    existing = store.get_source_metadata(source_id)
+    was_retracted = existing is not None and is_retracted(existing)
+    if was_retracted and "retracted" not in metadata and domain == "scientific":
+        metadata = dict(metadata)
+        for key in _RETRACTION_FIELDS:
+            if key in existing["metadata"] and key not in metadata:
+                metadata[key] = existing["metadata"][key]
+    if is_retracted({"domain": domain, "metadata": metadata}) != was_retracted:
+        return {
+            "source_id": source_id,
+            "error": "retraction_state_change",
+            "message": (
+                "use source-retract / source-unretract to change whether a "
+                "source is retracted"
+            ),
+        }
 
     # If the domain itself is unknown, refuse to write (Store would raise too)
     domain_error = any(e.field == "domain" for e in errors)
@@ -273,8 +297,14 @@ def retract_source(
     updated_meta["retracted_at"] = retracted_at or time.time()
     updated_meta["retraction_reason"] = reason
 
-    store.set_source_metadata(source_id, existing["domain"], updated_meta)
-    claims_retracted = store.retract_source(source_id)
+    # Metadata and claim cascade commit together, or not at all.
+    with store.tx() as cx:
+        cx.execute(
+            "INSERT OR REPLACE INTO source_metadata "
+            "(source_id, domain, metadata, updated_at) VALUES (?, ?, ?, ?)",
+            (source_id, existing["domain"], json.dumps(updated_meta), time.time()),
+        )
+        claims_retracted = store._retract_source_claims_tx(cx, source_id)
 
     after = store.get_source_metadata(source_id)
 
@@ -290,12 +320,18 @@ def unretract_source(
 ) -> dict:
     """Reverse a retraction: flip retracted=False, clear retracted_at, and
     transition claims from 'retracted' back to 'active'. Wraps in store.tx()
-    for atomicity."""
+    for atomicity.
+
+    Claims dropped by a ``retracted`` contradiction disposition stay
+    retracted: that was a decision about the claim, not about its source.
+    """
     existing = store.get_source_metadata(source_id)
     if existing is None:
         return {"error": "no_metadata"}
     if existing["domain"] != "scientific":
         return {"error": "not_scientific_domain"}
+    if not is_retracted(existing):
+        return {"error": "not_retracted"}
 
     before = {
         "domain": existing["domain"],
@@ -309,23 +345,25 @@ def unretract_source(
 
     with store.tx() as cx:
         # Update metadata
-        import json as _json
         cx.execute(
             "INSERT OR REPLACE INTO source_metadata "
             "(source_id, domain, metadata, updated_at) VALUES (?, ?, ?, ?)",
-            (source_id, existing["domain"], _json.dumps(updated_meta), time.time()),
+            (source_id, existing["domain"], json.dumps(updated_meta), time.time()),
         )
 
-        # Flip retracted claims back to active
+        # Flip retracted claims back to active, except those a `retracted`
+        # contradiction disposition dropped.
         claim_rows = cx.execute(
-            "SELECT id FROM claims WHERE source_id = ? AND status = 'retracted'",
+            "SELECT id FROM claims WHERE source_id = ? AND status = 'retracted' "
+            "AND retracted_cause IS NOT 'disposition'",
             (source_id,),
         ).fetchall()
         claim_ids = [r["id"] for r in claim_rows]
         if claim_ids:
             placeholders = ",".join("?" for _ in claim_ids)
             cx.execute(
-                f"UPDATE claims SET status = 'active' WHERE id IN ({placeholders})",
+                f"UPDATE claims SET status = 'active', retracted_cause = NULL "
+                f"WHERE id IN ({placeholders})",
                 claim_ids,
             )
             # Invalidate cached views that reference these claims

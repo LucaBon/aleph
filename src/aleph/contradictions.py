@@ -17,7 +17,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional
 
-from .db import Store
+from .db import Store, _revert_replicate_bump_tx
 from .llm import LLM
 from .log import log
 
@@ -474,6 +474,21 @@ def dispose(
                 f"contradiction_member_inactive:{cid}={c['status'] if c else 'missing'}"
             )
 
+    if disposition == "supersede" and (keep is None or drop is None):
+        raise ValueError("keep_drop_required_for_supersede")
+    if disposition == "retracted" and drop is None:
+        raise ValueError("drop_required_for_retracted")
+
+    # A prior `replicate` bump is undone before the new disposition applies,
+    # so re-disposing never compounds or strands it.
+    if crow["disposition"] == "replicate":
+        with store.tx() as cx:
+            _revert_replicate_bump_tx(cx, crow)
+            cx.execute(
+                "UPDATE contradictions SET confidence_delta_a = NULL, "
+                "confidence_delta_b = NULL WHERE id = ?", (contradiction_id,),
+            )
+
     # apply side effects based on disposition
     if disposition == "supersede":
         if keep is None or drop is None:
@@ -497,6 +512,12 @@ def dispose(
             )
             if cur.rowcount:
                 store._on_claims_deactivated_tx(cx, [drop], cause="retracted")
+            # Even if its source was retracted first, the claim is now
+            # dropped by this decision; unretracting the source won't revive it.
+            cx.execute(
+                "UPDATE claims SET retracted_cause = 'disposition' "
+                "WHERE id = ? AND status = 'retracted'", (drop,),
+            )
         store.update_contradiction_disposition(
             contradiction_id, disposition,
             rule=rule, applies_when=applies_when,

@@ -208,13 +208,19 @@ def derive_concepts(
     return new_ids
 
 
+# Statuses `validate_concept` may promote to `active`.
+_PROMOTABLE_STATUSES = ("draft", "attested")
+
+
 def validate_concept(
     store: Store, llm: LLM, concept_id: int,
 ) -> tuple[str, str]:
     """Run the GROUNDED verdict prompt against the concept's support set.
     Returns (verdict, reason). Updates the concept row: verdict goes to
-    validation_verdict; if GROUNDED, status becomes 'active'; otherwise
-    concept stays in current status (draft or stale)."""
+    validation_verdict; if GROUNDED and the concept is ``draft`` or
+    ``attested``, status becomes 'active'. Every other status is kept:
+    stale, superseded and invalidated concepts come back only through
+    ``rebuild_concept``, which makes a new row."""
     concept = store.get_concept(concept_id)
     if not concept:
         return ("UNGROUNDED", "concept not found")
@@ -251,7 +257,8 @@ def validate_concept(
         verdict = "UNGROUNDED"
         reason = f"support claims not active: {inactive}"
 
-    new_status = "active" if verdict == "GROUNDED" else concept["status"]
+    promotable = concept["status"] in _PROMOTABLE_STATUSES
+    new_status = "active" if verdict == "GROUNDED" and promotable else concept["status"]
     store.update_concept_status(
         concept_id, new_status,
         validation_verdict=verdict,

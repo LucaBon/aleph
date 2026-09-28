@@ -47,7 +47,7 @@ import sqlite3
 import time
 from typing import Optional, Protocol
 
-from .db import Store
+from .db import Store, _statuses_sql
 
 
 class Retriever(Protocol):
@@ -60,6 +60,9 @@ class Retriever(Protocol):
     """
 
     def search(self, keywords: list[str], limit: int = 30) -> list[sqlite3.Row]:
+        """Return active claims only. Retrievers that also accept an
+        ``include_retracted: bool`` keyword support the ``include_retracted``
+        query context; ``query()`` passes it only when a context asks."""
         ...
 
 
@@ -81,10 +84,14 @@ class KeywordRetriever:
         self.expand_aliases = expand_aliases
         self.domain = domain
 
-    def search(self, keywords: list[str], limit: int = 30) -> list[sqlite3.Row]:
+    def search(
+        self, keywords: list[str], limit: int = 30, *,
+        include_retracted: bool = False,
+    ) -> list[sqlite3.Row]:
         return self.store.search_claims(
             keywords, limit=limit,
             expand_aliases=self.expand_aliases, domain=self.domain,
+            include_retracted=include_retracted,
         )
 
 
@@ -108,10 +115,14 @@ class FTSRetriever:
         self.expand_aliases = expand_aliases
         self.domain = domain
 
-    def search(self, keywords: list[str], limit: int = 30) -> list[sqlite3.Row]:
+    def search(
+        self, keywords: list[str], limit: int = 30, *,
+        include_retracted: bool = False,
+    ) -> list[sqlite3.Row]:
         return self.store.search_claims_fts(
             keywords, limit=limit,
             expand_aliases=self.expand_aliases, domain=self.domain,
+            include_retracted=include_retracted,
         )
 
 
@@ -223,7 +234,8 @@ class EmbeddingRetriever:
         return blob
 
     def search(
-        self, keywords: list[str], limit: int = 30,
+        self, keywords: list[str], limit: int = 30, *,
+        include_retracted: bool = False,
     ) -> list[sqlite3.Row]:
         if not keywords:
             return []
@@ -238,7 +250,7 @@ class EmbeddingRetriever:
             "  SUBSTR(s.content, c.span_start + 1, c.span_end - c.span_start) "
             "    AS span_text "
             "FROM claims c JOIN sources s ON c.source_id = s.id "
-            "WHERE c.status = 'active' "
+            f"WHERE c.status IN ({_statuses_sql(include_retracted)}) "
             "ORDER BY c.extracted_at DESC LIMIT ?",
             (self.top_pool,),
         ).fetchall()

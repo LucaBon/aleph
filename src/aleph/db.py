@@ -266,6 +266,10 @@ def _run_alters(conn: sqlite3.Connection) -> None:
         "ALTER TABLE contradictions ADD COLUMN reopened_from TEXT",
         "ALTER TABLE contradictions ADD COLUMN confidence_delta_a REAL",
         "ALTER TABLE contradictions ADD COLUMN confidence_delta_b REAL",
+        # Why a claim is `retracted`: 'source' (source-retract) or
+        # 'disposition' (a `retracted` contradiction disposition dropped it).
+        # source-unretract only revives the former.
+        "ALTER TABLE claims ADD COLUMN retracted_cause TEXT",
     ]
     for stmt in alters:
         try:
@@ -284,6 +288,18 @@ def _run_alters(conn: sqlite3.Connection) -> None:
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = []
 
 SCHEMA_VERSION = max((v for v, _, _ in MIGRATIONS), default=1)
+
+
+def view_cache_key(question: str, context: Optional[dict] = None) -> str:
+    """The one definition of a view's cache key, shared by ``ask`` and the
+    agent-mode ``view-get`` / ``view-cache`` commands."""
+    raw = question.strip().lower() + "||" + json.dumps(context or {}, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _statuses_sql(include_retracted: bool) -> str:
+    """Claim statuses a search returns, as a SQL IN-list literal."""
+    return "'active', 'retracted'" if include_retracted else "'active'"
 
 
 class SchemaVersionError(RuntimeError):
@@ -555,6 +571,21 @@ def _is_keep_drop(row) -> bool:
     )
 
 
+def _revert_replicate_bump_tx(cx: sqlite3.Connection, row) -> None:
+    """Undo the confidence bump a `replicate` disposition recorded on ``row``.
+    Callers must then clear or overwrite the recorded deltas."""
+    if row["disposition"] != "replicate":
+        return
+    for claim_col, delta_col in (("claim_a_id", "confidence_delta_a"),
+                                 ("claim_b_id", "confidence_delta_b")):
+        delta = row[delta_col]
+        if delta:
+            cx.execute(
+                "UPDATE claims SET confidence = MAX(confidence - ?, 0.0) WHERE id = ?",
+                (delta, row[claim_col]),
+            )
+
+
 def _reopen_contradictions_tx(
     cx: sqlite3.Connection, contradiction_ids, cause: str,
 ) -> list[int]:
@@ -564,15 +595,7 @@ def _reopen_contradictions_tx(
         row = cx.execute("SELECT * FROM contradictions WHERE id = ?", (cid,)).fetchone()
         if row is None or not _is_resolved(row):
             continue
-        if row["disposition"] == "replicate":
-            for claim_col, delta_col in (("claim_a_id", "confidence_delta_a"),
-                                         ("claim_b_id", "confidence_delta_b")):
-                delta = row[delta_col]
-                if delta:
-                    cx.execute(
-                        "UPDATE claims SET confidence = MAX(confidence - ?, 0.0) WHERE id = ?",
-                        (delta, row[claim_col]),
-                    )
+        _revert_replicate_bump_tx(cx, row)
         cx.execute(
             "UPDATE contradictions SET status = 'open', disposition = 'unresolved', "
             "resolved_to = NULL, confidence_delta_a = NULL, confidence_delta_b = NULL, "
@@ -848,16 +871,61 @@ class Store:
         active instead of pointing at a deleted row.
         """
         with self.tx() as cx:
-            claim_rows = cx.execute(
-                "SELECT id FROM claims WHERE source_id = ?", (source_id,)
-            ).fetchall()
-            claim_ids = [r["id"] for r in claim_rows]
-            if claim_ids:
-                self._on_claims_deactivated_tx(
-                    cx, claim_ids, cause="remove_source", removing=frozenset(claim_ids),
-                )
-            cur = cx.execute("DELETE FROM sources WHERE id = ?", (source_id,))
-            return cur.rowcount
+            return self._remove_source_tx(cx, source_id)
+
+    def _remove_source_tx(self, cx: sqlite3.Connection, source_id: int) -> int:
+        """:meth:`remove_source` inside an open transaction."""
+        claim_rows = cx.execute(
+            "SELECT id FROM claims WHERE source_id = ?", (source_id,)
+        ).fetchall()
+        claim_ids = [r["id"] for r in claim_rows]
+        if claim_ids:
+            self._on_claims_deactivated_tx(
+                cx, claim_ids, cause="remove_source", removing=frozenset(claim_ids),
+            )
+        cur = cx.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        return cur.rowcount
+
+    def replace_source(self, path: str, content: str) -> dict:
+        """Replace every source at ``path`` with ``content``, in one transaction.
+
+        Unchanged content keeps its source (and claims) and drops any other
+        rows at the path. Content identical to a source at another path is
+        refused before anything is removed (``ValueError``).
+        """
+        sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        with self.tx() as cx:
+            old_ids = [r["id"] for r in cx.execute(
+                "SELECT id FROM sources WHERE path = ? ORDER BY id", (path,)
+            ).fetchall()]
+            same = cx.execute(
+                "SELECT id FROM sources WHERE sha256 = ?", (sha,)
+            ).fetchone()
+            if same is not None and same["id"] not in old_ids:
+                raise ValueError(f"duplicate_content:{same['id']}")
+            keep = same["id"] if same is not None else None
+            removed_ids = [sid for sid in old_ids if sid != keep]
+            removed_claims = 0
+            for sid in removed_ids:
+                removed_claims += cx.execute(
+                    "SELECT COUNT(*) FROM claims WHERE source_id = ?", (sid,)
+                ).fetchone()[0]
+                self._remove_source_tx(cx, sid)
+            if keep is None:
+                keep = cx.execute(
+                    "INSERT INTO sources (path, sha256, content, ingested_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (path, sha, content, time.time()),
+                ).lastrowid
+                status = "replaced" if old_ids else "ingested"
+            else:
+                status = "unchanged"
+        return {
+            "status": status,
+            "old_source_ids": removed_ids,
+            "old_claims_removed": removed_claims,
+            "source_id": keep,
+        }
 
     def _on_claims_deactivated_tx(
         self, cx: sqlite3.Connection, claim_ids, cause: str,
@@ -1120,6 +1188,7 @@ class Store:
         self, keywords: list[str], limit: int = 30, *,
         expand_aliases: bool = False,
         domain: Optional[str] = None,
+        include_retracted: bool = False,
     ) -> list[sqlite3.Row]:
         """Simple keyword search across subject/predicate/object.
 
@@ -1131,6 +1200,9 @@ class Store:
         surface predicates that resolve to any of the given keywords (WS-E.1).
         ``domain`` selects which predicate alias rows participate in the
         expansion; falls back to ``*`` when no domain-specific row matches.
+
+        ``include_retracted=True`` also returns ``retracted`` claims, for the
+        ``include_retracted`` query context.
         """
         if not keywords:
             return []
@@ -1152,7 +1224,8 @@ class Store:
                    SUBSTR(s.content, c.span_start + 1, c.span_end - c.span_start)
                        AS span_text
             FROM claims c JOIN sources s ON c.source_id = s.id
-            WHERE c.status = 'active' AND ({match_exprs}) > 0
+            WHERE c.status IN ({_statuses_sql(include_retracted)})
+              AND ({match_exprs}) > 0
             ORDER BY hits DESC, c.confidence DESC, c.extracted_at DESC
             LIMIT ?
         """
@@ -1162,6 +1235,7 @@ class Store:
         self, keywords: list[str], limit: int = 30, *,
         expand_aliases: bool = False,
         domain: Optional[str] = None,
+        include_retracted: bool = False,
     ) -> list[sqlite3.Row]:
         """BM25-ranked search over the FTS5 index of claim triples.
 
@@ -1184,7 +1258,7 @@ class Store:
             return []
         # double-quote each term to avoid FTS5 interpreting punctuation/syntax
         match_query = " OR ".join(f'"{k}"' for k in cleaned)
-        sql = """
+        sql = f"""
             SELECT c.*,
                    SUBSTR(s.content, c.span_start + 1, c.span_end - c.span_start)
                        AS span_text,
@@ -1192,7 +1266,8 @@ class Store:
             FROM claims_fts
             JOIN claims c ON c.id = claims_fts.rowid
             JOIN sources s ON c.source_id = s.id
-            WHERE claims_fts MATCH ? AND c.status = 'active'
+            WHERE claims_fts MATCH ?
+              AND c.status IN ({_statuses_sql(include_retracted)})
             ORDER BY bm25(claims_fts), c.confidence DESC, c.extracted_at DESC
             LIMIT ?
         """
@@ -1243,7 +1318,7 @@ class Store:
     # ---------- view cache ----------
 
     def get_cached_view(self, query: str) -> Optional[sqlite3.Row]:
-        qh = hashlib.sha256(query.strip().lower().encode()).hexdigest()
+        qh = view_cache_key(query)
         return self.conn.execute(
             "SELECT * FROM view_cache WHERE query_hash = ?", (qh,)
         ).fetchone()
@@ -1251,7 +1326,7 @@ class Store:
     def cache_view(self, query: str, response: str, claim_ids: list[int]) -> None:
         """Cache a view. Every cited claim must be active: a view citing an
         inactive claim would be stale the moment it's written."""
-        qh = hashlib.sha256(query.strip().lower().encode()).hexdigest()
+        qh = view_cache_key(query)
         if claim_ids:
             ph = ",".join("?" for _ in claim_ids)
             active = {
@@ -1364,20 +1439,27 @@ class Store:
     ) -> None:
         """Transition a concept's status. If the new status is one of
         {superseded, invalidated}, also invalidate any cached view that cited
-        this concept (use _invalidate_cache_for_concepts)."""
+        this concept (use _invalidate_cache_for_concepts).
+
+        ``superseded_by`` is kept unless a new value is given. A
+        ``validation_reason`` without a verdict (e.g. ``concept-invalidate
+        --reason``) is still recorded.
+        """
         with self.tx() as cx:
             if validation_verdict is not None:
                 cx.execute(
                     "UPDATE concepts SET status = ?, validation_verdict = ?, "
                     "validation_reason = ?, last_validated_at = ?, "
-                    "superseded_by = ? WHERE id = ?",
+                    "superseded_by = COALESCE(?, superseded_by) WHERE id = ?",
                     (status, validation_verdict, validation_reason,
                      time.time(), superseded_by, concept_id),
                 )
             else:
                 cx.execute(
-                    "UPDATE concepts SET status = ?, superseded_by = ? WHERE id = ?",
-                    (status, superseded_by, concept_id),
+                    "UPDATE concepts SET status = ?, "
+                    "validation_reason = COALESCE(?, validation_reason), "
+                    "superseded_by = COALESCE(?, superseded_by) WHERE id = ?",
+                    (status, validation_reason, superseded_by, concept_id),
                 )
             if status in ("active", "attested"):
                 self._require_active_supports_tx(cx, concept_id)
@@ -1693,20 +1775,25 @@ class Store:
         Returns the number of claims transitioned. Does NOT delete the source
         (retraction is part of the record)."""
         with self.tx() as cx:
-            claim_rows = cx.execute(
-                "SELECT id FROM claims WHERE source_id = ? AND status = 'active'",
-                (source_id,),
-            ).fetchall()
-            claim_ids = [r["id"] for r in claim_rows]
-            if not claim_ids:
-                return 0
-            placeholders = ",".join("?" for _ in claim_ids)
-            cx.execute(
-                f"UPDATE claims SET status = 'retracted' WHERE id IN ({placeholders})",
-                claim_ids,
-            )
-            self._on_claims_deactivated_tx(cx, claim_ids, cause="retract_source")
-            return len(claim_ids)
+            return self._retract_source_claims_tx(cx, source_id)
+
+    def _retract_source_claims_tx(self, cx: sqlite3.Connection, source_id: int) -> int:
+        """:meth:`retract_source` inside an open transaction."""
+        claim_rows = cx.execute(
+            "SELECT id FROM claims WHERE source_id = ? AND status = 'active'",
+            (source_id,),
+        ).fetchall()
+        claim_ids = [r["id"] for r in claim_rows]
+        if not claim_ids:
+            return 0
+        placeholders = ",".join("?" for _ in claim_ids)
+        cx.execute(
+            f"UPDATE claims SET status = 'retracted', retracted_cause = 'source' "
+            f"WHERE id IN ({placeholders})",
+            claim_ids,
+        )
+        self._on_claims_deactivated_tx(cx, claim_ids, cause="retract_source")
+        return len(claim_ids)
 
     # ---------- WS-E.1: predicate aliases ----------
 
@@ -1718,8 +1805,14 @@ class Store:
         Tries domain-specific rows first, then ``*`` wildcards. Cycle-guarded
         with a 10-step ceiling, mirroring :meth:`resolve_subject`.
         """
+        return self._predicate_chain(cx, predicate, domain)[-1]
+
+    def _predicate_chain(
+        self, cx: sqlite3.Connection, predicate: str, domain: Optional[str],
+    ) -> list[str]:
+        """Every predicate visited while resolving ``predicate`` (inclusive)."""
+        chain = [predicate]
         s = predicate
-        seen = {s}
         for _ in range(10):
             row = None
             if domain:
@@ -1734,14 +1827,11 @@ class Store:
                     "WHERE alias_from = ? AND domain = '*'",
                     (s,),
                 ).fetchone()
-            if not row:
-                return s
-            nxt = row["canonical_to"]
-            if nxt in seen:
-                return nxt
-            seen.add(nxt)
-            s = nxt
-        return s
+            if not row or row["canonical_to"] in chain:
+                break
+            s = row["canonical_to"]
+            chain.append(s)
+        return chain
 
     def resolve_predicate(
         self, predicate: str, *, domain: Optional[str] = None,
@@ -1785,9 +1875,9 @@ class Store:
                 "note": "no-op",
             }
         # cycle check: if resolving `t` through the current alias chain ever
-        # reaches `f`, adding f -> t would loop. Check inside the table.
-        chain_target = self.resolve_predicate(t, domain=domain)
-        if chain_target == f:
+        # passes through `f` (not just ends there), adding f -> t would loop.
+        chain = self._predicate_chain(self.conn, t, domain)
+        if f in chain:
             return {
                 "claims_rewritten": 0, "cache_cleared": False,
                 "domain": domain, "from_canonical": f, "to_canonical": t,
@@ -1817,9 +1907,11 @@ class Store:
             cache_cleared = 0
             if affected:
                 placeholders = ",".join("?" for _ in affected)
+                # Rewrite to the end of t's chain, so claims never sit under
+                # a predicate that is itself an alias.
                 cur = cx.execute(
                     f"UPDATE claims SET predicate = ? WHERE id IN ({placeholders})",
-                    [t, *affected],
+                    [chain[-1], *affected],
                 )
                 rewritten = cur.rowcount
                 cache_cleared = _invalidate_cache_for_claims(

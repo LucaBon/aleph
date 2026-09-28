@@ -1781,6 +1781,11 @@ def tier6_authority_regression():
                          [claim_id])
         cached = store.get_cached_view("how long do tesla batteries last?")
         assert cached is not None, "view should be cached"
+        # view-cache / view-get and `ask` must agree on the key.
+        from aleph.query import _compute_cache_hash
+        assert cached["query_hash"] == _compute_cache_hash(
+            "How long do Tesla batteries last?", None), \
+            "agent-mode and ask cache keys must match"
 
         # NOW RETRACT
         retract_result = retract_source(store, sid, "data fabrication")
@@ -2423,6 +2428,8 @@ def tier8_query_integration_regression():
         # The query pipeline should NOT filter them out
         # We just need to verify the pipeline ran to completion without filtering
         assert qr2.answer != "", "T8.2: answer should not be empty"
+        assert c1 in qr2.claim_ids_used, \
+            f"T8.2: retracted claim {c1} should be retrievable: {qr2.claim_ids_used}"
         print("  Tier 8.2 OK: include_retracted=True allows retracted claims through")
 
         # ---- T8.3: Jurisdiction prefix match ----

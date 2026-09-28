@@ -249,6 +249,18 @@ def tier4_regression():
         assert stats["claims_active"] == 0, stats
         print("  Tier 4.6 OK: source-replace swaps source atomically (old claims cascaded)")
 
+        # unchanged content keeps the source and its claims
+        r = run(db, "source-replace", str(src))
+        assert r["status"] == "unchanged" and r["old_source_ids"] == [], r
+
+        # content identical to another source is refused before any delete
+        other = Path(d) / "other.md"
+        other.write_text("Widgets have weight 30kg.\n")
+        err = run_err(db, "source-replace", str(other))
+        assert err["code"] == "duplicate_content", err
+        assert run(db, "stats-json")["sources"] == 1
+        print("  Tier 4.6 OK: source-replace keeps unchanged sources, refuses duplicates")
+
         # source-replace on a missing file still errors cleanly
         err = run_err(db, "source-replace", "/nonexistent/path/file.md")
         assert err["code"] == "not_a_file", err

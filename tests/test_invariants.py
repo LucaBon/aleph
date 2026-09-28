@@ -320,3 +320,152 @@ def test_alias_overwrite_requires_force_and_cannot_cycle(store):
     assert store.add_alias("cell", "battery")["note"] == "alias-exists"
     store.add_alias("battery", "cell")  # battery -> cell -> pack
     assert store.add_alias("cell", "battery", force=True)["note"] == "would-create-cycle"
+
+
+# ---------- PR #1 review regressions ----------
+
+
+def test_predicate_alias_cycle_through_chain_is_refused(store):
+    store.add_predicate_alias("*", "a", "x")
+    store.add_predicate_alias("*", "b", "a")  # b -> a -> x
+    assert store.add_predicate_alias("*", "a", "b")["note"] == "would-create-cycle"
+
+
+def test_predicate_alias_rewrites_claims_to_end_of_chain(store):
+    sid = store.add_source("a.txt", "the pack holds 75 kWh")
+    cid = _claim(store, sid, "75 kWh")  # predicate "has"
+    store.add_predicate_alias("*", "holds", "contains")
+    store.add_predicate_alias("*", "has", "holds")  # has -> holds -> contains
+    assert store.get_claim(cid)["predicate"] == store.normalize_subject("contains")
+
+
+def test_redisposing_replicate_never_compounds_confidence(store):
+    sid = store.add_source("a.txt", "capacity is 90 percent; capacity is ninety percent")
+    a = _claim(store, sid, "90 percent")
+    b = _claim(store, sid, "ninety percent")
+    ct = store.add_contradiction(a, b)
+    dispose(store, ct, "replicate")
+    dispose(store, ct, "replicate")
+    assert store.get_claim(a)["confidence"] == pytest.approx(0.85)
+    dispose(store, ct, "dispute")
+    assert store.get_claim(a)["confidence"] == pytest.approx(0.8)
+    assert store.check_invariants() == []
+
+
+class _GroundedLLM:
+    def complete_json(self, system, user):
+        return {"verdict": "GROUNDED", "reason": "ok"}
+
+
+def test_validate_does_not_revive_superseded_or_invalidated_concepts(store):
+    from aleph.concepts import invalidate_concept, validate_concept
+
+    sid = store.add_source("a.txt", "cells degrade slowly; packs degrade fast")
+    a = _claim(store, sid, "cells degrade slowly")
+    old = store.add_concept("battery", "old", "summary", 0.7, [(a, "premise")])
+    new = store.add_concept("battery", "new", "summary", 0.7, [(a, "premise")])
+    store.update_concept_status(old, "superseded", superseded_by=new)
+    validate_concept(store, _GroundedLLM(), old)
+    row = store.get_concept(old)
+    assert row["status"] == "superseded" and row["superseded_by"] == new
+
+    invalidate_concept(store, new, "wrong scope")
+    validate_concept(store, _GroundedLLM(), new)
+    row = store.get_concept(new)
+    assert row["status"] == "invalidated"
+
+    fresh = store.add_concept("battery", "fresh", "summary", 0.7, [(a, "premise")])
+    validate_concept(store, _GroundedLLM(), fresh)
+    assert store.get_concept(fresh)["status"] == "active"
+
+
+def test_invalidate_records_reason(store):
+    from aleph.concepts import invalidate_concept
+
+    sid = store.add_source("a.txt", "cells degrade slowly")
+    a = _claim(store, sid, "cells degrade slowly")
+    c = store.add_concept("battery", "s", "summary", 0.7, [(a, "premise")])
+    invalidate_concept(store, c, "wrong scope")
+    assert store.get_concept(c)["validation_reason"] == "wrong scope"
+
+
+def test_resolve_by_recency_leaves_pairs_with_inactive_members_open(store):
+    from aleph.lint import resolve_by_recency
+
+    old = store.add_source("old.txt", "retention is 30 days")
+    new = _scientific_source(store, "new.txt", "retention is 90 days")
+    o = _claim(store, old, "30 days")
+    n = _claim(store, new, "90 days")
+    ct = store.add_contradiction(o, n)
+    authority.retract_source(store, new, "fabricated")
+
+    assert resolve_by_recency(store) == 0
+    row = store.conn.execute("SELECT * FROM contradictions WHERE id = ?", (ct,)).fetchone()
+    assert row["status"] == "open" and row["resolved_to"] is None
+    assert store.get_claim(o)["status"] == "active"
+    assert store.check_invariants() == []
+
+
+def test_unretract_keeps_claims_dropped_by_retracted_disposition(store):
+    sid = _scientific_source(store, "a.txt", "capacity is 90 percent; capacity is 47 percent")
+    good = _claim(store, sid, "90 percent")
+    bad = _claim(store, sid, "47 percent")
+    ct = store.add_contradiction(good, bad)
+    dispose(store, ct, "retracted", keep=good, drop=bad)
+
+    assert authority.unretract_source(store, sid, "oops")["error"] == "not_retracted"
+    assert store.get_claim(bad)["status"] == "retracted"
+
+    authority.retract_source(store, sid, "fabricated")
+    authority.unretract_source(store, sid, "restored")
+    assert store.get_claim(good)["status"] == "active"
+    assert store.get_claim(bad)["status"] == "retracted"
+    assert store.check_invariants() == []
+
+
+def test_set_metadata_cannot_change_retraction_state(store):
+    sid = _scientific_source(store, "a.txt", "capacity is 90 percent")
+    cid = _claim(store, sid, "90 percent")
+
+    out = authority.set_metadata(store, sid, "scientific",
+                                 {"peer_reviewed": True, "retracted": True})
+    assert out["error"] == "retraction_state_change"
+    assert store.get_claim(cid)["status"] == "active"
+
+    authority.retract_source(store, sid, "fabricated")
+    out = authority.set_metadata(store, sid, "scientific", {"peer_reviewed": False})
+    assert "error" not in out
+    meta = store.get_source_metadata(sid)["metadata"]
+    assert meta["retracted"] is True and meta["peer_reviewed"] is False
+    out = authority.set_metadata(store, sid, "scientific", {"retracted": False})
+    assert out["error"] == "retraction_state_change"
+
+
+def test_retract_source_is_atomic(store, monkeypatch):
+    sid = _scientific_source(store, "a.txt", "capacity is 90 percent")
+    cid = _claim(store, sid, "90 percent")
+
+    def boom(cx, source_id):
+        raise RuntimeError("cascade failed")
+
+    monkeypatch.setattr(store, "_retract_source_claims_tx", boom)
+    with pytest.raises(RuntimeError):
+        authority.retract_source(store, sid, "fabricated")
+    assert not authority.is_retracted(store.get_source_metadata(sid))
+    assert store.get_claim(cid)["status"] == "active"
+
+
+def test_replace_source_refuses_duplicate_before_removing(store):
+    sid = store.add_source("a.txt", "capacity is 90 percent")
+    cid = _claim(store, sid, "90 percent")
+    store.add_source("b.txt", "capacity is 47 percent")
+    with pytest.raises(ValueError):
+        store.replace_source("a.txt", "capacity is 47 percent")
+    assert store.get_claim(cid)["status"] == "active"
+
+    out = store.replace_source("a.txt", "capacity is 90 percent")
+    assert out["status"] == "unchanged" and out["source_id"] == sid
+    out = store.replace_source("a.txt", "capacity is 80 percent")
+    assert out["status"] == "replaced" and out["old_source_ids"] == [sid]
+    assert store.get_claim(cid) is None
+    assert store.check_invariants() == []
