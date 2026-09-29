@@ -154,3 +154,24 @@ def test_dispositions_are_found_for_old_contradictions(tmp_path):
     rows = _claims_with_spans(store, [a, b], False)
     assert _group_by_disposition(store, rows)["unresolved"] == [(a, b)]
     store.close()
+
+
+def test_included_because_names_the_disposition(kb):
+    from aleph.contradictions import dispose
+    store, a, b, c, _ = kb
+    x = store.conn.execute("SELECT id FROM contradictions").fetchone()[0]
+    dispose(store, x, "replicate")
+    llm = RecordingLLM(f"x [claim:{a}].")
+    query(store, llm, "pack retain capacity", use_cache=False)
+    assert f"included because: replicates [claim:{a}]" in llm.prompts[0]
+
+
+def test_differing_senses_are_not_expanded_as_conflicts(kb):
+    store, a, b, c, _ = kb
+    s1 = store.add_predicate_sense(canonical="state", sense_tag="retention", domain="generic")
+    s2 = store.add_predicate_sense(canonical="state", sense_tag="degradation", domain="generic")
+    store.set_claim_predicate_sense(a, s1, assigned_by="agent", confidence=0.9, explicit=True)
+    store.set_claim_predicate_sense(b, s2, assigned_by="agent", confidence=0.9, explicit=True)
+    llm = RecordingLLM(f"x [claim:{a}].")
+    query(store, llm, "pack retain capacity", use_cache=False)
+    assert f"[claim:{b}] (" not in llm.prompts[0]

@@ -79,7 +79,7 @@ def test_legal_authority_outranks_recency(store):
                         authority_level=2, specificity=1, issued_at=time.time())
     _pair(store, statute, regulation)
     r = resolve_by_source_date(store)
-    assert r["resolved"] == 1 and r["decisions"][0]["rule"] == "legal_authority"
+    assert r["resolved"] == 1 and r["decisions"][0]["rule"] == "lex_superior"
     assert store.get_claim(regulation)["status"] == "superseded"
 
 
@@ -103,7 +103,7 @@ def test_legal_same_level_and_specificity_newer_wins(store):
                  authority_level=2, specificity=1, issued_at=time.time())
     _pair(store, old, new)
     r = resolve_by_source_date(store)
-    assert r["decisions"][0]["rule"] == "legal_authority"
+    assert r["decisions"][0]["rule"] == "lex_posterior"
     assert store.get_claim(old)["status"] == "superseded"
 
 
@@ -133,11 +133,61 @@ def test_legal_effective_at_serves_as_the_date(store):
     assert store.get_claim(a)["status"] == "superseded"
 
 
-def test_jurisdiction_prefix_is_comparable(store):
+def test_nested_jurisdiction_levels_compare(store):
     a = _claim(store, "state rule", "legal", authority_level=2, jurisdiction="US-CA", issued_at=1.0)
     b = _claim(store, "federal rule", "legal", authority_level=3, jurisdiction="US", issued_at=1.0)
     _pair(store, a, b)
     assert resolve_by_source_date(store)["resolved"] == 1
+    assert store.get_claim(a)["status"] == "superseded"
+
+
+def test_nested_jurisdiction_same_level_is_not_lex_posterior(store):
+    # A newer state statute doesn't supersede an older federal one of the
+    # same level: that's preemption/competence, not lex posterior.
+    fed = _claim(store, "federal rule", "legal", authority_level=3, jurisdiction="US", issued_at=1.0)
+    state = _claim(store, "state rule", "legal", authority_level=3, jurisdiction="US-CA", issued_at=2.0)
+    _pair(store, fed, state)
+    r = resolve_by_source_date(store)
+    assert r["resolved"] == 0 and r["skipped"][0]["reason"] == "nested_jurisdiction"
+    assert store.get_claim(fed)["status"] == "active"
+
+
+def test_one_missing_jurisdiction_is_unknown(store):
+    it = _claim(store, "IT rule", "legal", authority_level=3, jurisdiction="IT", issued_at=1.0)
+    other = _claim(store, "unknown rule", "legal", authority_level=4, issued_at=1.0)
+    _pair(store, it, other)
+    r = resolve_by_source_date(store)
+    assert r["resolved"] == 0 and r["skipped"][0]["reason"] == "unknown_jurisdiction"
+
+
+def test_specificity_missing_on_one_side_is_unranked(store):
+    a = _claim(store, "rule a", "legal", authority_level=2, specificity=0, issued_at=1.0)
+    b = _claim(store, "rule b", "legal", authority_level=2, issued_at=2.0)
+    _pair(store, a, b)
+    r = resolve_by_source_date(store)
+    assert r["resolved"] == 0 and r["skipped"][0]["reason"] == "unranked"
+
+
+def test_date_decided_legal_pair_is_labelled_lex_posterior(store):
+    a = _claim(store, "old", "legal", authority_level=2, specificity=1, issued_at=1.0)
+    b = _claim(store, "new", "legal", authority_level=2, specificity=1, issued_at=2.0)
+    _pair(store, a, b)
+    assert resolve_by_source_date(store)["decisions"][0]["rule"] == "lex_posterior"
+
+
+def test_chains_resolve_to_the_newest_claim(store):
+    # A newer than B newer than C; pairs (B,C) and (A,B). Order of the open
+    # list must not strand C as the survivor of B-C.
+    c = _claim(store, "c 6 years", "scientific", published_at=1.0)
+    b = _claim(store, "b 8 years", "scientific", published_at=2.0)
+    a = _claim(store, "a 10 years", "scientific", published_at=3.0)
+    _pair(store, b, c)
+    _pair(store, a, b)
+    resolve_by_source_date(store)
+    assert [store.get_claim(x)["status"] for x in (a, b, c)] == ["active", "superseded", "superseded"]
+    # (B,C) reopens when its keeper B is superseded (the cascade's rule);
+    # both of its members are inactive, so nothing live rests on it.
+    assert store.check_invariants() == []
 
 
 def test_mixed_domain_pair_is_left_open(store):
@@ -165,3 +215,23 @@ def test_resolve_by_recency_returns_the_resolved_count(store):
     _pair(store, a, b)
     assert resolve_by_recency(store) == 1
     assert store.check_invariants() == []
+
+
+def test_lint_cli_prints_skip_reasons(tmp_path, capsys, monkeypatch):
+    import json as _json
+    from aleph.cli import main
+    db = tmp_path / "cli.db"
+    s = Store(db)
+    a = _claim(s, "10 years", "scientific", published_at=2.0)
+    b = _claim(s, "8 years", "scientific", published_at=1.0)
+    c = _claim(s, "undated 5 years")
+    _pair(s, a, b)
+    _pair(s, a, c)
+    s.close()
+    fx = tmp_path / "fx.json"
+    fx.write_text(_json.dumps([{"match": {"default": True}, "response": {"contradicts": False}}]))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert main(["--db", str(db), "--mock-llm", str(fx), "lint", "--resolve-by-recency"]) == 0
+    out = capsys.readouterr().out
+    assert "resolved 1 contradictions by source date" in out
+    assert "left open: 1 undated" in out

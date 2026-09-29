@@ -73,7 +73,10 @@ def resolve_relevant(store: Store, spec: dict) -> set[int]:
         "AS span FROM claims c JOIN sources s ON s.id = c.source_id "
         "WHERE c.status = 'active'"
     ).fetchall()
-    want = spec["source"].replace("\\", "/").lstrip("/")
+    want = spec["source"].replace("\\", "/")
+    while want.startswith("./"):
+        want = want[2:]
+    want = want.lstrip("/")
 
     def same_file(path: str) -> bool:
         path = path.replace("\\", "/")

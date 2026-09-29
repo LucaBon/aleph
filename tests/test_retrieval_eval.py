@@ -118,5 +118,6 @@ def test_source_match_is_by_path_component(tmp_path):
         assert resolve_relevant(s, {"source": "a.txt", "span_contains": "Alpha"}) == set()
         assert resolve_relevant(s, {"source": "data.txt", "span_contains": "Alpha"}) == {1}
         assert resolve_relevant(s, {"source": "docs/data.txt", "span_contains": "Alpha"}) == {1}
+        assert resolve_relevant(s, {"source": "./docs/data.txt", "span_contains": "Alpha"}) == {1}
     finally:
         s.close()

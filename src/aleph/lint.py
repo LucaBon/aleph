@@ -47,12 +47,18 @@ def lint(store: Store, llm: LLM, verbose: bool = False) -> dict:
     return detect_all(store, llm, verbose=verbose)
 
 
-def _comparable_jurisdictions(ja, jb) -> bool:
-    """Authority levels only compare within one legal order: the same
-    jurisdiction, or one nested in the other (US-CA inside US)."""
+def _jurisdiction_relation(ja, jb) -> str:
+    """same | nested (US-CA inside US) | unknown (only one side says) | unrelated.
+    Two sources that both leave jurisdiction unset count as the same order."""
+    if not ja and not jb:
+        return "same"
     if not ja or not jb:
-        return True
-    return ja == jb or ja.startswith(jb + "-") or jb.startswith(ja + "-")
+        return "unknown"
+    if ja == jb:
+        return "same"
+    if ja.startswith(jb + "-") or jb.startswith(ja + "-"):
+        return "nested"
+    return "unrelated"
 
 
 def _ordered(store: Store, a, b):
@@ -61,13 +67,16 @@ def _ordered(store: Store, a, b):
 
     - Sources of different domains: left open (``mixed_domain``). A paper
       and a statute are not two versions of one fact.
-    - Two legal sources: lex superior (higher authority_level), then lex
-      posterior (newer source date). Each step needs its field on both
-      sides; a missing one leaves the pair open (``unranked`` / ``undated``)
-      rather than counting as lowest. Levels from unrelated jurisdictions
-      aren't compared (``cross_jurisdiction``). A pair split only by
-      specificity is left open (``lex_specialis``): a special rule displaces
-      the general one only within its scope, which is `distinguish`.
+    - Two legal sources, compared only within one legal order: an unset
+      jurisdiction on one side (``unknown_jurisdiction``) or unrelated ones
+      (``cross_jurisdiction``) leave the pair open. Then lex superior
+      (higher authority_level; also across nested orders, e.g. US over
+      US-CA), then lex posterior (newer source date, same jurisdiction
+      only: across nested orders it is preemption, ``nested_jurisdiction``).
+      Each step needs its field on both sides; a missing one leaves the pair
+      open (``unranked`` / ``undated``). A specificity split is left open
+      (``lex_specialis``): a special rule displaces the general one only
+      within its scope, which is `distinguish`.
     - Otherwise the newer source date wins. Extraction time never decides.
     """
     ma = store.get_source_metadata(a["source_id"])
@@ -76,27 +85,46 @@ def _ordered(store: Store, a, b):
         return None, None, "mixed_domain"
     if ma and mb and ma["domain"] == "legal":
         ia, ib = ma["metadata"], mb["metadata"]
-        if not _comparable_jurisdictions(ia.get("jurisdiction"), ib.get("jurisdiction")):
+        rel = _jurisdiction_relation(ia.get("jurisdiction"), ib.get("jurisdiction"))
+        if rel == "unknown":
+            return None, None, "unknown_jurisdiction"
+        if rel == "unrelated":
             return None, None, "cross_jurisdiction"
         la, lb = ia.get("authority_level"), ib.get("authority_level")
         if la is None or lb is None:
             return None, None, "unranked"
         if la != lb:
-            return (a, b, "legal_authority") if la > lb else (b, a, "legal_authority")
-        if (ia.get("specificity") or 0) != (ib.get("specificity") or 0):
+            return (a, b, "lex_superior") if la > lb else (b, a, "lex_superior")
+        if rel == "nested":
+            return None, None, "nested_jurisdiction"
+        sa, sb = ia.get("specificity"), ib.get("specificity")
+        if (sa is None) != (sb is None):
+            return None, None, "unranked"
+        if sa != sb:
             return None, None, "lex_specialis"
         da, db = source_date(ma), source_date(mb)
         if da is None or db is None:
             return None, None, "undated"
         if da == db:
             return None, None, "tie"
-        return (a, b, "legal_authority") if da > db else (b, a, "legal_authority")
+        return (a, b, "lex_posterior") if da > db else (b, a, "lex_posterior")
     da, db = source_date(ma), source_date(mb)
     if da is None or db is None:
         return None, None, "undated"
     if da == db:
         return None, None, "tie"
     return (a, b, "source_date") if da > db else (b, a, "source_date")
+
+
+def _pair_age(store: Store, row) -> tuple:
+    """Sort key: pairs whose newer source is oldest go first. In a chain
+    A > B > C with pairs (A,B) and (B,C), resolving (B,C) first lets C be
+    superseded by B before B is superseded by A; the other order leaves C
+    active because (B,C) is refused once B is inactive."""
+    dates = [source_date(store.get_source_metadata(c["source_id"]))
+             for c in (store.get_claim(row["claim_a_id"]), store.get_claim(row["claim_b_id"])) if c]
+    known = [d for d in dates if d is not None]
+    return (max(known) if known else float("inf"), row["id"])
 
 
 def resolve_by_source_date(store: Store) -> dict:
@@ -106,7 +134,8 @@ def resolve_by_source_date(store: Store) -> dict:
     pairs, and pairs ``dispose`` refuses stay open and are reported in
     ``skipped`` with their reason."""
     decisions, skipped = [], []
-    for row in store.list_contradictions(only_open=True):
+    rows = sorted(store.list_contradictions(only_open=True), key=lambda r: _pair_age(store, r))
+    for row in rows:
         a = store.get_claim(row["claim_a_id"])
         b = store.get_claim(row["claim_b_id"])
         if not a or not b:

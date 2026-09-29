@@ -222,7 +222,7 @@ def cmd_lint(args) -> int:
     if args.resolve_by_recency:
         r = resolve_by_source_date(store)
         print(f"resolved {r['resolved']} contradictions by source date "
-              f"(legal pairs by authority, then specificity, then date)")
+              f"(legal pairs by authority level, then date; specificity splits stay open)")
         if r["skipped"]:
             reasons = Counter(s["reason"] for s in r["skipped"])
             print("left open: " + ", ".join(f"{n} {why}" for why, n in sorted(reasons.items())))

@@ -162,3 +162,28 @@ def test_cached_unused_respects_include_retracted(kb, tmp_path):
     fresh = query(store, llm, "pack retains capacity", context=ctx)
     hit = query(store, llm, "pack retains capacity", context=ctx)
     assert hit.from_cache and hit.claim_ids_unused == fresh.claim_ids_unused
+
+
+def test_counter_evidence_respects_the_query_context(kb):
+    from aleph import authority
+    store, (a, b, c) = kb
+    authority.set_metadata(store, store.get_claim(a)["source_id"], "legal",
+                           {"jurisdiction": "US-CA", "authority_level": 1})
+    authority.set_metadata(store, store.get_claim(b)["source_id"], "legal",
+                           {"jurisdiction": "DE", "authority_level": 1})
+    store.add_contradiction(a, b)
+    ctx = {"jurisdiction": "US-CA"}
+    assert counter_evidence(store, [a], ctx) == []
+    assert [ce["counter_claim_id"] for ce in counter_evidence(store, [a])] == [b]
+    llm = AskLLM(f"Packs retain 90% capacity [claim:{a}].")
+    assert query(store, llm, "pack retains capacity", context=ctx).counter_evidence == []
+
+
+def test_counter_evidence_skips_differing_senses(kb):
+    store, (a, b, c) = kb
+    s1 = store.add_predicate_sense(canonical="retain", sense_tag="capacity", domain="generic")
+    s2 = store.add_predicate_sense(canonical="retain", sense_tag="customers", domain="generic")
+    store.set_claim_predicate_sense(a, s1, assigned_by="agent", confidence=0.9, explicit=True)
+    store.set_claim_predicate_sense(b, s2, assigned_by="agent", confidence=0.9, explicit=True)
+    store.add_contradiction(a, b)
+    assert counter_evidence(store, [a]) == []

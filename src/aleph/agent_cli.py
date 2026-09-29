@@ -412,7 +412,14 @@ def cmd_counter_evidence(args, store: Store) -> int:
         _err("invalid_claim_ids", "--claim-ids must be comma-separated integers",
              claim_ids=args.claim_ids)
         return 1
-    _ok({"claim_ids": ids, "counter_evidence": counter_evidence(store, ids)})
+    ctx = None
+    if args.context:
+        try:
+            ctx = json.loads(args.context)
+        except json.JSONDecodeError as e:
+            _err("invalid_context", f"--context is not valid JSON: {e}")
+            return 1
+    _ok({"claim_ids": ids, "counter_evidence": counter_evidence(store, ids, ctx)})
     return 0
 
 
@@ -2496,6 +2503,8 @@ def register_agent_commands(subparsers, common) -> set[str]:
     p = _add("counter-evidence",
              help="uncited sides of live conflicts (open, dispute, gap) with the given claims")
     p.add_argument("--claim-ids", required=True, help="comma-separated claim ids an answer cites")
+    p.add_argument("--context", default=None,
+                   help="the answer's query context (JSON), so excluded claims aren't reported")
     p.set_defaults(func=cmd_counter_evidence)
 
     p = _add("review-list", help="list review-queue items (default: open)")

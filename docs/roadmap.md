@@ -137,16 +137,27 @@ The contradiction-scaling work is conditional on Phase 4 keeping contradictions 
 
 **Status (2026-09-29):** everything except the contradiction-scaling item is in place. The retrieval exit criterion is unmeasured.
 
-- **Recency by source date** (`lint.resolve_by_source_date`; `resolve_by_recency` wraps it). The source's own date decides (`authority.source_date`: issued, published, effective or reviewed, depending on the domain), never extraction time. Between two legal sources, authority level decides first (lex superior), then date (lex posterior). Each step needs its field on both sources. Missing fields never count as lowest. These pairs stay open, each reported with its reason:
+- **Recency by source date** (`lint.resolve_by_source_date`; `resolve_by_recency` wraps it). The source's own date decides (`authority.source_date`: issued, published, effective or reviewed, depending on the domain), never extraction time. Two legal sources are compared only within one legal order:
+  - authority level decides first (lex superior), including across nested jurisdictions (US over US-CA);
+  - then the newer date decides (lex posterior), but only within the same jurisdiction.
+
+  Each step needs its field on both sources. A missing field never counts as lowest.
+
+  Pairs are resolved oldest first, so in a chain A > B > C the oldest claim C doesn't survive.
+
+  These pairs stay open, each reported with its reason:
   - pairs from different domains (`mixed_domain`);
+  - legal pairs where only one source has a jurisdiction (`unknown_jurisdiction`);
   - legal pairs from unrelated jurisdictions (`cross_jurisdiction`);
-  - legal pairs split only by specificity (`lex_specialis`): a special rule displaces the general one only within its scope, which is `distinguish`, not `supersede`;
+  - same-level legal pairs from nested jurisdictions (`nested_jurisdiction`): that's preemption, not lex posterior;
+  - legal pairs with a missing authority level or a one-sided specificity (`unranked`);
+  - legal pairs split by specificity (`lex_specialis`): a special rule displaces the general one only within its scope, which is `distinguish`, not `supersede`;
   - cross-subject pairs;
   - undated pairs and ties;
   - pairs that `dispose` refuses.
-- **Expansion:** `ask` and `compose` add claims that conflict with, or are conditions of, retrieved claims, up to `k // 2` of them. Each goes through the context filter and is labeled "included because: …". The claims block lists each claim's conditions. Open conflicts (never disposed, or reopened by the cascade) appear in the dispositions block as `unresolved`, with a prompt rule to present both sides. `--no-expand` turns this off. Adding a contradiction, disposing it, reopening it, or resolving it with `contradiction-resolve` now invalidates views citing either side, because their prose may describe the old conflict state.
+- **Expansion:** `ask` and `compose` add claims that conflict with, or are conditions of, retrieved claims, up to `k // 2` of them. Each goes through the context filter and is labeled "included because: …", which names the disposition (conflicts with, replicates, coexists with, …). Pairs with differing predicate senses are skipped. The claims block lists each claim's conditions. Open conflicts (never disposed, or reopened by the cascade) appear in the dispositions block as `unresolved`, with a prompt rule to present both sides. `--no-expand` turns this off. Adding a contradiction, disposing it, reopening it, or resolving it with `contradiction-resolve` now invalidates views citing either side, because their prose may describe the old conflict state.
 - **`claim_ids_unused`:** the claims shown to the synthesizer but not cited. `view_cache.considered_claim_ids` stores them. It isn't an invalidation index: a cache hit filters it to claims that are still active.
-- **Counter-evidence check** (`query.counter_evidence`; the agent-mode command is `counter-evidence --claim-ids`): the uncited side of any live conflict (open, `dispute` or `gap`) involving a cited claim. It is computed on every read, so it reflects contradictions recorded after the view was cached, without invalidating the view.
+- **Counter-evidence check** (`query.counter_evidence`; the agent-mode command is `counter-evidence --claim-ids`): the uncited side of any live conflict (open, `dispute` or `gap`) involving a cited claim. It is computed on every read, applying the query's context filter and skipping pairs with differing predicate senses. So it reflects later changes to the counter claims without invalidating the view.
 - **Hybrid retrieval** (`HybridRetriever`, reciprocal rank fusion with k=60; `ALEPH_RETRIEVER=hybrid` fuses FTS with embeddings) and a **retrieval eval** (`python -m aleph.retrieval_eval`, [benchmark/retrieval_eval/](../benchmark/retrieval_eval/)).
   - The query sets carry **draft** labels.
   - On a local store built from `corpus/` (agent-extracted claims; the store isn't in the repo), recall@10 is 0.79 for FTS and 0.73 for keyword. The labels are draft.
@@ -164,6 +175,16 @@ A code review of this branch found more defects, each now fixed with a regressio
 - disposition grouping read only the newest 1000 contradictions in the store;
 - `HybridRetriever` broke retrievers that implement only the minimal protocol;
 - the eval's source matching matched `data.txt` for `a.txt`.
+
+A second review found that:
+
+- a newer state statute could supersede an older federal one;
+- a legal source with no jurisdiction was compared with one that had a jurisdiction;
+- counter-evidence ignored the query context;
+- expansion called replications "conflicts";
+- chains of pairs could leave the oldest claim active.
+
+All of these are fixed with tests. Still open: every contradiction add scans all cached views, which costs about 12 ms per add at 5,000 views. This matters only when bulk `contradiction-scan` runs against a large cache.
 
 ### Phase 4: Minimal core with optional extensions
 - A `features` store config. The core is sources, claims, views and the cascade; concepts, conditions, contradictions and authority become opt-in.

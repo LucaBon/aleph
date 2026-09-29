@@ -36,7 +36,7 @@ To get the Phase 3 exit numbers:
  "labeler": "human:<id>"}
 ```
 
-A `relevant` entry matches every active claim whose source path ends with `source` and whose span contains `span_contains` (whitespace-normalized). Naming claims by their text rather than their ids lets labels survive a store rebuild. An entry that matches nothing is listed under `unresolved`.
+A `relevant` entry matches every active claim whose source path ends with the path components of `source` (so `a.txt` doesn't match `data.txt`) and whose span contains `span_contains` (whitespace-normalized). Naming claims by their text rather than their ids lets labels survive a store rebuild. An entry that matches nothing is listed under `unresolved`.
 
 ## Running
 

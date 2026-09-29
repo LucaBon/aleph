@@ -542,6 +542,18 @@ def _claims_with_spans(store: Store, ids: list[int], include_retracted: bool) ->
     return [by_id[i] for i in ids if i in by_id]
 
 
+# How an expanded claim relates to the retrieved one, by disposition, so a
+# replication isn't pitched to the synthesizer as a conflict.
+_RELATION_BY_DISPOSITION = {
+    "replicate": "replicates",
+    "coexist": "coexists with",
+    "distinguish": "is distinguished from",
+    "reconcile": "is reconciled with",
+    "dispute": "disputes",
+    "gap": "has an unexplained conflict with",
+}
+
+
 def _expand_evidence(
     store: Store, claim_rows: list, context: Optional[dict], limit: int,
 ) -> tuple[list, dict[int, str]]:
@@ -557,13 +569,16 @@ def _expand_evidence(
     for row in claim_rows:
         cid = row["id"]
         for x in store.conn.execute(
-            "SELECT claim_a_id, claim_b_id FROM contradictions x "
+            "SELECT claim_a_id, claim_b_id, status, disposition FROM contradictions x "
             f"WHERE (claim_a_id = ? OR claim_b_id = ?) AND NOT {_KEEP_RESOLVED_SQL} "
             "ORDER BY id", (cid, cid),
         ):
             other = x["claim_b_id"] if x["claim_a_id"] == cid else x["claim_a_id"]
-            if other not in have:
-                candidates.setdefault(other, f"conflicts with [claim:{cid}]")
+            if other in have or _senses_differ(store, cid, other):
+                continue
+            relation = "conflicts with" if x["status"] == "open" else \
+                _RELATION_BY_DISPOSITION.get(x["disposition"], "conflicts with")
+            candidates.setdefault(other, f"{relation} [claim:{cid}]")
         for cond in store.get_claim_conditions(cid):
             other = cond["condition_claim_id"]
             if other not in have:
@@ -737,7 +752,10 @@ def _cache_view(
 # agreement; supersede / retracted and the legacy `contradiction-resolve
 # --keep` (status resolved, disposition left at its default) settle it.
 _COUNTER_DISPOSITIONS = ("dispute", "gap")
-_LIVE_CONFLICT_SQL = "(x.status = 'open' OR x.disposition IN ('dispute', 'gap'))"
+_LIVE_CONFLICT_SQL = (
+    "(x.status = 'open' OR x.disposition IN ("
+    + ", ".join(f"'{d}'" for d in _COUNTER_DISPOSITIONS) + "))"
+)
 # Settled with one side kept: the other side is no longer part of the picture.
 _KEEP_RESOLVED_SQL = (
     "(x.status = 'resolved' AND COALESCE(x.disposition, 'unresolved') "
@@ -745,11 +763,26 @@ _KEEP_RESOLVED_SQL = (
 )
 
 
-def counter_evidence(store: Store, cited_claim_ids) -> list[dict]:
+def _senses_differ(store: Store, a_id: int, b_id: int) -> bool:
+    """WS-E.2: both claims have predicate senses and they differ, so the
+    pair is two different relations, not a conflict."""
+    rows = store.conn.execute(
+        "SELECT claim_id, sense_id FROM claim_predicate_senses WHERE claim_id IN (?, ?)",
+        (a_id, b_id),
+    ).fetchall()
+    senses = {r["claim_id"]: r["sense_id"] for r in rows}
+    return len(senses) == 2 and senses[a_id] != senses[b_id]
+
+
+def counter_evidence(
+    store: Store, cited_claim_ids, context: Optional[dict] = None,
+) -> list[dict]:
     """For each cited claim, the active, uncited claims it is in a live
     conflict with (an open contradiction, or one disposed as dispute or
     gap). An answer that cites one side of such a conflict and not the
-    other is presenting a contested fact as settled."""
+    other is presenting a contested fact as settled. Counter claims go
+    through the same context filter as retrieval, and pairs with differing
+    predicate senses (WS-E.2) are not conflicts."""
     cited = set(cited_claim_ids)
     if not cited:
         return []
@@ -769,15 +802,23 @@ def counter_evidence(store: Store, cited_claim_ids) -> list[dict]:
         """,
         (*cited, *cited),
     ).fetchall()
-    out = []
+    candidates = []
     for r in rows:
+        if _senses_differ(store, r["claim_a_id"], r["claim_b_id"]):
+            continue
         for mine, other in ((r["claim_a_id"], r["claim_b_id"]),
                             (r["claim_b_id"], r["claim_a_id"])):
             if mine in cited and other not in cited:
-                out.append({"cited_claim_id": mine, "counter_claim_id": other,
-                            "contradiction_id": r["id"],
-                            "disposition": r["disposition"]})
-    return out
+                candidates.append({"cited_claim_id": mine, "counter_claim_id": other,
+                                   "contradiction_id": r["id"],
+                                   "disposition": r["disposition"]})
+    if not candidates or not context:
+        return candidates
+    allowed = {row["id"] for row in _filter_claims_by_context(
+        store, _claims_with_spans(store, sorted({c["counter_claim_id"] for c in candidates}),
+                                  bool(context.get("include_retracted"))),
+        context)}
+    return [c for c in candidates if c["counter_claim_id"] in allowed]
 
 
 def _claim_ids_with_status(store: Store, ids, include_retracted: bool = False) -> set[int]:
@@ -861,7 +902,7 @@ def query(
                     _claim_ids_with_status(
                         store, considered, bool((context or {}).get("include_retracted")))
                     - set(used)),
-                counter_evidence=counter_evidence(store, used),
+                counter_evidence=counter_evidence(store, used, context),
             )
 
     # 1. retrieve candidate claims
@@ -1013,7 +1054,7 @@ def query(
         concept_ids_used=concept_ids_used,
         from_cache=False,
         claim_ids_unused=sorted(retrieved_ids - cited_claim_ids),
-        counter_evidence=counter_evidence(store, claim_ids_used),
+        counter_evidence=counter_evidence(store, claim_ids_used, context),
     )
 
 
