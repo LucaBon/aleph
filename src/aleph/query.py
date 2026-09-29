@@ -26,7 +26,12 @@ from .retrieval import Retriever, default_retriever
 # the verifier decided the span does not support the sentence. Both surface
 # as non-GROUNDED but have very different meanings for the caller.
 # ---------------------------------------------------------------------------
-_VERDICT_RANK = {"GROUNDED": 0, "PARTIAL": 1, "UNGROUNDED": 2, "ERROR": 3}
+# UNCERTAIN comes only from the opt-in layered verifier: no layer could decide.
+_VERDICT_RANK = {"GROUNDED": 0, "PARTIAL": 1, "UNCERTAIN": 1.5, "UNGROUNDED": 2, "ERROR": 3}
+
+# Layered-verifier verdicts on ask's scale.
+_LAYERED_TO_ASK = {"SUPPORTED": "GROUNDED", "UNSUPPORTED": "UNGROUNDED",
+                   "UNCERTAIN": "UNCERTAIN"}
 
 # ---------------------------------------------------------------------------
 # Prompts — v1 kept for reference; v2 is always used now.
@@ -631,6 +636,7 @@ def query(
     context: Optional[dict] = None,
     retriever: Retriever | None = None,
     concept_k: Optional[int] = None,
+    verifier=None,
 ) -> QueryResult:
     """Run the full question -> verified answer pipeline.
 
@@ -642,8 +648,19 @@ def query(
     include_retracted.  When None, only retraction filtering applies.
 
     `concept_k` controls how many concepts to retrieve (default max(5, retrieve_k // 3)).
+
+    `verifier` swaps the claim-citation check for a
+    :class:`~aleph.verifier.LayeredVerifier` (opt-in until the verifier eval
+    shows it beats the default). Its verdicts map SUPPORTED -> GROUNDED,
+    UNSUPPORTED -> UNGROUNDED, UNCERTAIN -> UNCERTAIN; reasons are prefixed
+    with the deciding layer. Concept citations keep the union-of-spans check.
+    With a `verifier`, the view cache is bypassed (neither read nor written).
     """
     # --- cache check ---
+    # Views are cached under ask's default verifier. A view verified another
+    # way is neither served from nor written to the cache.
+    if verifier is not None:
+        use_cache = False
     cache_hash = _compute_cache_hash(question, context)
     if use_cache:
         cached = _get_cached_view(store, cache_hash)
@@ -741,7 +758,11 @@ def query(
             sent_concept_ids = []
             for kind, cid in cited_refs:
                 if kind == "claim":
-                    verdict_reason = _verify_one(llm, store, sent, cid)
+                    if verifier is not None:
+                        others = [c for k, c in cited_refs if k == "claim" and c != cid]
+                        verdict_reason = _verify_layered(verifier, store, sent, cid, others)
+                    else:
+                        verdict_reason = _verify_one(llm, store, sent, cid)
                     per_ref[(kind, cid)] = verdict_reason
                     per_claim[cid] = verdict_reason
                     sent_claim_ids.append(cid)
@@ -815,6 +836,30 @@ def _verify_one(llm: LLM, store: Store, sentence: str, claim_id: int) -> tuple[s
     span = store.get_span_text(claim_id)
     if span is None:
         return "UNGROUNDED", "cited claim not found"
+    return _verify_span(llm, span, sentence, claim_id=claim_id)
+
+
+def _verify_layered(
+    verifier, store: Store, sentence: str, claim_id: int, co_cited: list[int] = (),
+) -> tuple[str, str]:
+    """Verify with a LayeredVerifier, against the span and its context window.
+    A sentence citing several claims ("A is 5 and B is 7 [claim:1][claim:2]")
+    is checked against the other cited spans too, so a fact from claim 2
+    doesn't make claim 1's check reject the sentence."""
+    span = store.get_span_text(claim_id)
+    if span is None:
+        return "UNGROUNDED", "cited claim not found"
+    context = [store.get_context_text(claim_id) or ""]
+    context += [store.get_span_text(c) or "" for c in co_cited]
+    r = verifier.verify(sentence, span, "\n".join(t for t in context if t))
+    return _LAYERED_TO_ASK[r.verdict], f"[{r.layer}] {r.reason}"
+
+
+def _verify_span(
+    llm: LLM, span: str, sentence: str, *, claim_id: Optional[int] = None,
+) -> tuple[str, str]:
+    """The LLM span check behind :func:`_verify_one`, on a raw span. Also the
+    baseline the layered verifier is measured against."""
     try:
         result = llm.complete_json(
             VERIFY_SYSTEM,

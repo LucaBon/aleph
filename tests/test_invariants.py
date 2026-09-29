@@ -126,6 +126,19 @@ class CascadeMachine(RuleBasedStateMachine):
     def undo_alias(self, a):
         self.store.undo_alias(a)
 
+    @rule(a=st.sampled_from(SUBJECTS))
+    def review_alias(self, a):
+        try:
+            self.store.enqueue_review("alias", a, reason="manual")
+        except LookupError:
+            pass  # not currently an alias
+
+    @precondition(lambda self: self._active_claims())
+    @rule(data=st.data())
+    def review_claim(self, data):
+        cid = data.draw(st.sampled_from(self._active_claims()))
+        self.store.enqueue_review("claim", cid, reason="manual")
+
     # ---------- concepts ----------
 
     @precondition(lambda self: self._active_claims())
@@ -468,4 +481,21 @@ def test_replace_source_refuses_duplicate_before_removing(store):
     out = store.replace_source("a.txt", "capacity is 80 percent")
     assert out["status"] == "replaced" and out["old_source_ids"] == [sid]
     assert store.get_claim(cid) is None
+    assert store.check_invariants() == []
+
+
+def test_undo_refuses_to_restore_an_alias_into_a_cycle(store):
+    # battery->pack, overwritten to battery->cell, then pack->battery. Undoing
+    # the overwrite would restore battery->pack: a cycle. Found by the
+    # thorough property profile.
+    sid = store.add_source("a.txt", "doc: retains retains retains.")
+    store.add_alias("battery", "pack")
+    store.add_claim(sid, "battery", "has", "o", 1, 2, 0.8)
+    store.add_alias("battery", "cell", force=True)
+    store.add_alias("pack", "battery")
+    r = store.undo_alias("battery")
+    assert r == {"undone": False, "note": "would-create-cycle", "alias_from": "battery",
+                 "restore_to": "pack"}
+    c = store.add_claim(sid, "battery", "has", "o", 2, 3, 0.8)
+    assert store.get_claim(c)["subject"] == "cell"
     assert store.check_invariants() == []

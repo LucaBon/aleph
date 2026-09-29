@@ -45,7 +45,7 @@ Both e2e scripts import the installed `aleph` package, so run `pip install -e .[
 ### API-mode commands (require `ANTHROPIC_API_KEY`)
 ```bash
 aleph ingest PATH [PATH ...] [--extract-conditions]  # recurses; .txt/.md/.markdown only
-aleph ask "question" [-k 30] [--no-verify] [--no-cache] [--json] [--context JSON]
+aleph ask "question" [-k 30] [--no-verify] [--no-cache] [--json] [--context JSON] [--verifier llm|layered]
 aleph lint [--resolve-by-recency]
 aleph show [CLAIM_ID] [--limit 50]
 aleph sources
@@ -55,6 +55,8 @@ aleph clear-cache
 ```
 Global flags: `--db PATH` (default: `./aleph.db` if it exists, else `~/.aleph/aleph.db`), `--model MODEL` (default: `$ALEPH_MODEL` or `claude-opus-4-7`).
 
+- `ingest` reports per file: claims added, dropped (ungrounded) and flagged for fidelity review, LLM token usage, list-price cost, and cost per 1k source tokens (source tokens estimated as chars / 4; unknown model price ⇒ cost `None`, never a guess). Prices live in `PRICES_PER_MTOK` in [llm.py](src/aleph/llm.py).
+- `--verifier layered` swaps ask's claim-citation check for the layered verifier (see "Claim fidelity and the layered verifier" below). Default stays `llm` until the verifier eval shows the layered one is better.
 - `--extract-conditions` runs a pre-pass that extracts scope/method/sample/limitation/assumption claims from the whole document, then links every atomic claim from the same source to the whole scope set as `explicit=True` conditions. Opt-in (off by default).
 - `--context` accepts a JSON object with optional keys `{jurisdiction, date, domain, include_retracted}`. Claims are filtered by source metadata before synthesis: retracted claims are dropped unless `include_retracted`; jurisdiction matches exact or dotted-prefix (`US-CA` keeps `US-CA-LA`); `date` (ISO or epoch) is compared against `effective_at`/`expires_at` on the source; `domain` matches `source_metadata.domain`. The cache key is `sha256(question || json(context, sort_keys=True))`, so different contexts cache independently.
 
@@ -64,7 +66,8 @@ Everything Claude Code drives. All commands are registered in [src/aleph/agent_c
 Grouped by workstream:
 
 - **Sources** — `source-add`, `source-replace` (atomic remove+re-add at a given path), `source-get`, `source-list`, `source-remove`, `source-yield` (per-source claim density for triage).
-- **Claims** — `claim-add` (optional `--conditions id:kind,id:kind,...`), `claim-get`, `claim-search` (FTS5 if available, else LIKE; `--compact` / `--fields` for compact output), `claim-by-subject` (same projection flags), `claim-supersede`, `subjects`.
+- **Claims** — `claim-add` (optional `--proposition`, `--conditions id:kind,id:kind,...`; the response carries `fidelity_issues` and `review_id`), `claim-get` (includes `proposition` and `context_text`), `claim-fidelity-check [ID | --all] [--enqueue]`, `claim-search` (FTS5 if available, else LIKE; `--compact` / `--fields` for compact output), `claim-by-subject` (same projection flags), `claim-supersede`, `subjects`.
+- **Review queue (Phase 2)** — `review-list [--status open|accepted|rejected|obsolete|all] [--type claim|contradiction|concept|alias]`, `review-add --type T (--id N | --alias FROM)`, `review-resolve ID --decision accepted|rejected --by WHO` (records the decision only; a rejection's `next_step` names the command that actually fixes the item).
 - **Aliases** — `alias-add` (refuses to overwrite an existing alias without `--force`), `alias-list`, `alias-log` (merge events), `alias-undo FROM` (restores the subjects a merge rewrote).
 - **Contradictions (manual)** — `contradiction-add` (takes `CLAIM_A CLAIM_B` or `--claim-a/--claim-b`; `--cross-subject --relation-kind X --justification Y` is the P1.6 escape valve for doctrinal tensions across subjects), `contradiction-list [--disposition D] [--kind K] [--cross-subject-filter any|only|exclude] [--all]`, `contradiction-resolve`.
 - **Contradictions (typed/disposition-aware, WS-B)** — `contradiction-scan` (LLM), `contradiction-dispose` (`--rationale-concept` accepts both `active` and `attested` concepts), `contradiction-get`, `contradiction-rule-get`.
@@ -103,9 +106,17 @@ aleph --db aleph.db claim-add --source-id 1 --subject "tesla battery" \
   --conditions 12:sample,17:method
 ```
 
+### Verifier eval (Phase 2)
+```bash
+python -m aleph.verifier_eval --pairs benchmark/verifier_eval/pairs.jsonl \
+    --verifier deterministic|baseline|layered [--mock-llm F] [--out R.json]
+```
+`deterministic` needs no key; `baseline` (ask's default check) and `layered` call the LLM. The shipped pairs carry draft labels (`labeler: draft:claude`), so reports say `labels_status: draft` and their rates are not publishable; see [benchmark/verifier_eval/README.md](benchmark/verifier_eval/README.md).
+
 ### Environment
 - `ANTHROPIC_API_KEY` — required for the `LLM_COMMANDS` set (API-mode `ingest`/`ask`/`lint` plus the agent-mode LLM-calling commands listed above). Gated in [cli.py:263](src/aleph/cli.py#L263).
 - `ALEPH_MODEL` — default model override ([llm.py](src/aleph/llm.py)).
+- `ALEPH_ENTAILER=nli` (optional `ALEPH_ENTAILER_MODEL`) — turns on the layered verifier's NLI entailment layer (needs the `embeddings` extra).
 
 ## Architecture
 
@@ -140,6 +151,12 @@ A claim that cannot be located as a verbatim substring of its source is refused 
 - [agent_cli.py:cmd_claim_add](src/aleph/agent_cli.py) uses `content.find(span)` — there is no fuzzy match at the agent boundary. If your agent-composed span doesn't appear verbatim in the source, the write fails.
 
 Concepts have a looser analog: the validator prompt requires every factual element of a concept's statement to be supported by the *union* of its support spans, returning `GROUNDED | PARTIAL | UNGROUNDED`. Only `GROUNDED` promotes a concept from `draft` to `active`.
+
+### Claim fidelity and the layered verifier (Phase 2)
+- Every claim stores an optional `proposition` (the claim as one sentence; the triple is its index) and a context window (`context_start`/`context_end`: enclosing sentence ± one, never across a paragraph break, ≤ 600 chars) computed at write time by `fidelity.context_window`.
+- `Store.add_claim` runs `fidelity.check_fidelity` on the claim's proposition, else predicate + object (the subject is an index label, so it isn't checked), against span + context: numbers, dates, units, negation (added or dropped) and entities must appear there. Issues queue the claim in `review_queue` (reason `fidelity`) in the same transaction. **Flags never refuse a write** — the verbatim-span check stays the only hard gate.
+- `review_queue` rows target exactly one claim/contradiction/concept (FK `ON DELETE CASCADE`) or alias (`alias_from`, with the merge's `canonical_to` recorded in `details`; overwriting or undoing the alias closes its reviews as `obsolete`, and `check_invariants` reports `open_review_without_target` otherwise). At most one open row per (target, reason) (unique partial index). Re-enqueueing a finding identical to an accepted/rejected one returns that decision instead of re-queuing. `resolve_review` only records `accepted | rejected`; don't make it mutate the target.
+- `verifier.LayeredVerifier`: deterministic (verbatim restatement of the *whole* span ⇒ SUPPORTED, never a fragment; added number/date/unit/negation ⇒ UNSUPPORTED; entity flags and dropped negations are only hints) → optional entailer → LLM (`SUPPORTED | UNSUPPORTED | UNCERTAIN`; a failed or off-vocabulary call is UNCERTAIN, never UNSUPPORTED). In `ask` it maps SUPPORTED→GROUNDED, UNSUPPORTED→UNGROUNDED, UNCERTAIN→UNCERTAIN (ranked between PARTIAL and UNGROUNDED); a multi-citation sentence is checked against each cited span plus the other cited spans; a layered `ask` bypasses the view cache. `verifier.baseline_verdict` wraps `query._verify_span` — the exact check ask uses by default — so the eval compares like with like.
 
 ### The query pipeline ([src/aleph/query.py](src/aleph/query.py))
 The pipeline is always `SYNTHESIZE_V2` — v1 prompts are kept in the file for reference only.
@@ -176,7 +193,10 @@ Tables:
 - `claim_conditions` — WS-D.
 - `source_metadata` — WS-C.
 - `contradiction_rules` — WS-B (rule + applies_when + rationale_concept_id).
-- `claims_fts` — FTS5 virtual table with triggers mirroring INSERT/DELETE/UPDATE on `claims`.
+- `claims_fts` — FTS5 virtual table with triggers mirroring INSERT/DELETE/UPDATE on `claims`. `_init_fts` rebuilds it when its docsize count differs from `claims` (stores created before FTS).
+- `review_queue` — Phase 2 (schema migration 2).
+
+Schema version 2 (`MIGRATIONS` in db.py; each migration runs inside an explicit `BEGIN`, since sqlite3 would otherwise autocommit DDL) adds `claims.{proposition, context_start, context_end}` (context backfilled with the frozen `fidelity._context_window_v2` — never edit it; change `context_window` instead — proposition left NULL) and `review_queue`. New stores run it too.
 
 Additional columns added via `_run_alters`:
 - `contradictions.{kind, disposition, disposition_at, candidate_disposition, overlap_score}`

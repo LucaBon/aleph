@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
+from .fidelity import _context_window_v2
 from .log import log
 from .normalization import Normalizer, get_normalizer
 
@@ -280,14 +281,95 @@ def _run_alters(conn: sqlite3.Connection) -> None:
             raise
 
 
+REVIEW_ITEM_TYPES = ("claim", "contradiction", "concept", "alias")
+REVIEW_DECISIONS = ("accepted", "rejected")
+
+
+def _add_column(conn: sqlite3.Connection, stmt: str) -> None:
+    try:
+        conn.execute(stmt)
+    except sqlite3.OperationalError as e:
+        if "duplicate column" not in str(e).lower():
+            raise
+
+
+# One row per item under review. Exactly one target column is set, matching
+# item_type; the foreign keys drop a claim/contradiction/concept review with
+# its target. Alias reviews are closed as `obsolete` when the alias is undone.
+_REVIEW_QUEUE_DDL = """
+CREATE TABLE IF NOT EXISTS review_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_type TEXT NOT NULL,   -- claim | contradiction | concept | alias
+    claim_id INTEGER REFERENCES claims(id) ON DELETE CASCADE,
+    contradiction_id INTEGER REFERENCES contradictions(id) ON DELETE CASCADE,
+    concept_id INTEGER REFERENCES concepts(id) ON DELETE CASCADE,
+    alias_from TEXT,
+    reason TEXT NOT NULL,      -- fidelity | manual | ...
+    details TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'open',
+        -- open | accepted | rejected | obsolete
+    created_at REAL NOT NULL,
+    resolved_at REAL,
+    resolved_by TEXT,
+    resolution_note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_review_status ON review_queue(status);
+CREATE INDEX IF NOT EXISTS idx_review_claim ON review_queue(claim_id);
+CREATE INDEX IF NOT EXISTS idx_review_contradiction
+    ON review_queue(contradiction_id);
+CREATE INDEX IF NOT EXISTS idx_review_concept ON review_queue(concept_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_one_open
+    ON review_queue(item_type, IFNULL(claim_id, 0), IFNULL(contradiction_id, 0),
+                    IFNULL(concept_id, 0), IFNULL(alias_from, ''), reason)
+    WHERE status = 'open';
+"""
+
+
+def _migrate_v2_proposition_context_review(conn: sqlite3.Connection) -> None:
+    """Claims gain a ``proposition`` (the claim as a sentence; the triple
+    becomes an index) and a context window around the span, which the
+    fidelity checker reads. Existing claims get a computed context window;
+    their proposition stays NULL rather than being fabricated from the triple.
+    Adds the review queue.
+    """
+    _add_column(conn, "ALTER TABLE claims ADD COLUMN proposition TEXT")
+    _add_column(conn, "ALTER TABLE claims ADD COLUMN context_start INTEGER")
+    _add_column(conn, "ALTER TABLE claims ADD COLUMN context_end INTEGER")
+    rows = conn.execute(
+        "SELECT c.id, c.span_start, c.span_end, s.content FROM claims c "
+        "JOIN sources s ON s.id = c.source_id"
+    ).fetchall()
+    for claim_id, start, end, content in rows:
+        c_start, c_end = _context_window_v2(content, start, end)
+        conn.execute(
+            "UPDATE claims SET context_start = ?, context_end = ? WHERE id = ?",
+            (c_start, c_end, claim_id),
+        )
+    # executescript would COMMIT mid-migration; run statements one by one so
+    # they stay inside _migrate's transaction.
+    for stmt in _REVIEW_QUEUE_DDL.split(";"):
+        if stmt.strip():
+            conn.execute(stmt)
+
+
 # Numbered schema migrations. SCHEMA + _run_alters define version 1; each
 # later change that alters what existing rows *mean* (not just a new nullable
 # column) gets an entry here: (version, description, fn(conn)). Entries run in
 # order, each in its own transaction, and bump `store_config.schema_version`.
 # Never edit or reorder a released entry — append a new one.
-MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = []
+MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
+    (2, "claim proposition + context window; review queue",
+     _migrate_v2_proposition_context_review),
+]
 
 SCHEMA_VERSION = max((v for v, _, _ in MIGRATIONS), default=1)
+
+
+def _fidelity_text(proposition: Optional[str], predicate: str, object_: str) -> str:
+    """What the fidelity checker reads for a claim: its proposition, else
+    predicate + object. The subject is an index label ("aggravante art 577"),
+    not text the span has to contain."""
+    return proposition or f"{predicate} {object_}"
 
 
 def view_cache_key(question: str, context: Optional[dict] = None) -> str:
@@ -326,13 +408,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for version, _desc, fn in sorted(MIGRATIONS, key=lambda m: m[0]):
         if version <= current:
             continue
-        with conn:
+        # An explicit BEGIN: in sqlite3's legacy transaction mode DDL (ALTER,
+        # CREATE) would otherwise autocommit, leaving a half-applied migration.
+        conn.commit()
+        conn.execute("BEGIN")
+        try:
             fn(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO store_config (key, value, updated_at) "
                 "VALUES ('schema_version', ?, ?)",
                 (str(version), time.time()),
             )
+        except BaseException:
+            conn.rollback()
+            raise
+        conn.commit()
         current = version
     if row is None:
         conn.execute(
@@ -373,13 +463,14 @@ def _init_fts(conn: sqlite3.Connection) -> bool:
             VALUES (new.id, new.subject, new.predicate, new.object);
         END;
     """)
-    # backfill any pre-existing rows that are missing from the FTS index
-    # (happens when upgrading a store that was created before FTS existed)
-    conn.execute(
-        "INSERT INTO claims_fts(rowid, subject, predicate, object) "
-        "SELECT id, subject, predicate, object FROM claims "
-        "WHERE id NOT IN (SELECT rowid FROM claims_fts)"
-    )
+    # Backfill a store created before FTS existed. `SELECT rowid FROM
+    # claims_fts` reads the external content table (claims), not the index,
+    # so compare against the index's own docsize table instead; a missing
+    # entry would make the update trigger's 'delete' corrupt the index.
+    indexed = conn.execute("SELECT count(*) FROM claims_fts_docsize").fetchone()[0]
+    total = conn.execute("SELECT count(*) FROM claims").fetchone()[0]
+    if indexed != total:
+        conn.execute("INSERT INTO claims_fts(claims_fts) VALUES('rebuild')")
     return True
 
 
@@ -727,6 +818,19 @@ def check_invariants(cx: sqlite3.Connection) -> list[dict]:
     ):
         violations.append({"kind": "claim_subject_is_alias", "claim_id": row["id"],
                            "subject": row["subject"]})
+
+    # Claim/contradiction/concept reviews go with their target by foreign key;
+    # an alias review must be closed when the merge it was filed on changes.
+    for row in cx.execute(
+        "SELECT r.id, r.alias_from, json_extract(r.details, '$.canonical_to') AS filed_to, "
+        "a.canonical_to AS current_to FROM review_queue r "
+        "LEFT JOIN subject_aliases a ON a.alias_from = r.alias_from "
+        "WHERE r.item_type = 'alias' AND r.status = 'open'"
+    ):
+        if row["current_to"] is None or row["current_to"] != row["filed_to"]:
+            violations.append({"kind": "open_review_without_target", "review_id": row["id"],
+                               "alias_from": row["alias_from"],
+                               "filed_to": row["filed_to"], "current_to": row["current_to"]})
     return violations
 
 class Store:
@@ -1039,6 +1143,8 @@ class Store:
                 "VALUES (?, ?, ?)",
                 (f, t, now),
             )
+            if previous_to is not None:
+                self._obsolete_alias_reviews_tx(cx, f, "alias overwritten")
             event_id = cx.execute(
                 "INSERT INTO alias_events (alias_from, canonical_to, previous_to, created_at) "
                 "VALUES (?, ?, ?, ?)",
@@ -1092,6 +1198,12 @@ class Store:
         ).fetchone()
         if event is None:
             return {"undone": False, "note": "no-live-alias", "alias_from": f}
+        # Restoring an overwritten target gets the same cycle check as
+        # add_alias: an alias added since may now lead back to f.
+        prev = event["previous_to"]
+        if prev is not None and f in self._alias_chain(prev):
+            return {"undone": False, "note": "would-create-cycle", "alias_from": f,
+                    "restore_to": prev}
         with self.tx() as cx:
             current_target = self.resolve_subject(event["canonical_to"])
             rewrites = cx.execute(
@@ -1114,6 +1226,7 @@ class Store:
                 cx.execute("DELETE FROM subject_aliases WHERE alias_from = ?", (f,))
             cx.execute("UPDATE alias_events SET undone_at = ? WHERE id = ?",
                        (time.time(), event["id"]))
+            self._obsolete_alias_reviews_tx(cx, f, "alias undone")
             if restored:
                 _invalidate_cache_for_claims(cx, restored, cause="alias_undo")
                 self._mark_concepts_stale_for_claims_tx(cx, restored, cause="alias_undo")
@@ -1150,25 +1263,211 @@ class Store:
         span_start: int,
         span_end: int,
         confidence: float,
+        proposition: Optional[str] = None,
     ) -> int:
+        """Insert a claim. Its context window is computed from the source,
+        and the fidelity checker runs on the proposition (else predicate +
+        object, as written): any issue queues the claim for review in the
+        same transaction. Fidelity issues never refuse the write."""
+        from .fidelity import check_fidelity, context_window
+
         canonical_subject = self.resolve_subject(subject)
         # Predicates get the same locale-aware rules: they are English words
         # in English corpora, Italian verbs in Italian corpora, etc.
         canonical_predicate = self.normalize_subject(predicate)
+        proposition = (proposition or "").strip() or None
+        src = self.get_source(source_id)
+        content = src["content"] if src else ""
+        c_start, c_end = context_window(content, span_start, span_end)
+        issues = check_fidelity(
+            _fidelity_text(proposition, predicate, object_),
+            content[span_start:span_end], content[c_start:c_end],
+        )
         with self.tx() as cx:
             cur = cx.execute(
                 """
                 INSERT INTO claims (source_id, subject, predicate, object,
-                                    span_start, span_end, confidence, extracted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    span_start, span_end, confidence, extracted_at,
+                                    proposition, context_start, context_end)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (source_id, canonical_subject, canonical_predicate, object_.strip(),
-                 span_start, span_end, confidence, time.time()),
+                 span_start, span_end, confidence, time.time(),
+                 proposition, c_start, c_end),
             )
-            return cur.lastrowid
+            claim_id = cur.lastrowid
+            if issues:
+                self._enqueue_review_tx(
+                    cx, "claim", claim_id, reason="fidelity",
+                    details={"issues": [i.to_dict() for i in issues]},
+                )
+            return claim_id
 
     def get_claim(self, claim_id: int) -> Optional[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM claims WHERE id = ?", (claim_id,)).fetchone()
+
+    def get_context_text(self, claim_id: int) -> Optional[str]:
+        """The source text of the claim's context window (the span plus its
+        neighbouring sentences)."""
+        row = self.conn.execute(
+            "SELECT s.content, c.context_start, c.context_end, c.span_start, c.span_end "
+            "FROM claims c JOIN sources s ON c.source_id = s.id WHERE c.id = ?",
+            (claim_id,),
+        ).fetchone()
+        if not row:
+            return None
+        start = row["context_start"] if row["context_start"] is not None else row["span_start"]
+        end = row["context_end"] if row["context_end"] is not None else row["span_end"]
+        return row["content"][start:end]
+
+    def claim_text(self, claim_id: int) -> Optional[str]:
+        """The claim as a sentence: its proposition, or the triple when the
+        claim predates propositions."""
+        row = self.get_claim(claim_id)
+        if not row:
+            return None
+        return row["proposition"] or f"{row['subject']} {row['predicate']} {row['object']}"
+
+    def check_claim_fidelity(self, claim_id: int) -> list:
+        """Re-run the fidelity checker on a stored claim."""
+        from .fidelity import check_fidelity
+
+        row = self.get_claim(claim_id)
+        if row is None:
+            raise LookupError(f"no claim with id {claim_id}")
+        return check_fidelity(
+            _fidelity_text(row["proposition"], row["predicate"], row["object"]),
+            self.get_span_text(claim_id) or "", self.get_context_text(claim_id) or "")
+
+    # ---------- review queue ----------
+
+    _REVIEW_TARGET_COLUMN = {
+        "claim": ("claim_id", "claims", "id"),
+        "contradiction": ("contradiction_id", "contradictions", "id"),
+        "concept": ("concept_id", "concepts", "id"),
+        "alias": ("alias_from", "subject_aliases", "alias_from"),
+    }
+
+    @staticmethod
+    def _obsolete_alias_reviews_tx(cx: sqlite3.Connection, alias_from: str, note: str) -> None:
+        """Close open reviews of an alias whose mapping just changed: they
+        were filed on a merge that no longer exists."""
+        cx.execute(
+            "UPDATE review_queue SET status = 'obsolete', resolved_at = ?, "
+            "resolution_note = ? "
+            "WHERE item_type = 'alias' AND alias_from = ? AND status = 'open'",
+            (time.time(), note, alias_from),
+        )
+
+    def _enqueue_review_tx(
+        self, cx: sqlite3.Connection, item_type: str, target, *,
+        reason: str, details: Optional[dict] = None,
+    ) -> int:
+        if item_type not in REVIEW_ITEM_TYPES:
+            raise ValueError(
+                f"item_type must be one of {REVIEW_ITEM_TYPES}, got {item_type!r}")
+        column, table, key = self._REVIEW_TARGET_COLUMN[item_type]
+        details = dict(details or {})
+        if item_type == "alias":
+            target = self.normalize_subject(str(target))
+            row = cx.execute("SELECT canonical_to FROM subject_aliases WHERE alias_from = ?",
+                             (target,)).fetchone()
+            if row is None:
+                raise LookupError(f"no alias {target!r}")
+            # The merge under review, so a later overwrite can't change it.
+            details["canonical_to"] = row["canonical_to"]
+        elif cx.execute(f"SELECT 1 FROM {table} WHERE {key} = ?", (target,)).fetchone() is None:
+            raise LookupError(f"no {item_type} {target!r}")
+        details_json = json.dumps(details, ensure_ascii=False, sort_keys=True)
+        existing = cx.execute(
+            f"SELECT id FROM review_queue WHERE item_type = ? AND {column} = ? "
+            "AND reason = ? AND status = 'open'",
+            (item_type, target, reason),
+        ).fetchone()
+        if existing:
+            return existing["id"]
+        # A decision already made on exactly this finding stands; re-running
+        # a check must not re-queue what a reviewer accepted or rejected.
+        decided = cx.execute(
+            f"SELECT id FROM review_queue WHERE item_type = ? AND {column} = ? "
+            "AND reason = ? AND status IN ('accepted', 'rejected') AND details = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (item_type, target, reason, details_json),
+        ).fetchone()
+        if decided:
+            return decided["id"]
+        cur = cx.execute(
+            f"INSERT INTO review_queue (item_type, {column}, reason, details, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (item_type, target, reason, details_json, time.time()),
+        )
+        return cur.lastrowid
+
+    def enqueue_review(
+        self, item_type: str, target, *, reason: str, details: Optional[dict] = None,
+    ) -> int:
+        """Queue an item for human/agent review. ``target`` is the claim,
+        contradiction or concept id, or the alias's ``from`` subject. An
+        identical open item (same target and reason) is returned, not
+        duplicated."""
+        with self.tx() as cx:
+            return self._enqueue_review_tx(cx, item_type, target, reason=reason,
+                                           details=details)
+
+    def open_claim_review(self, claim_id: int, reason: str) -> Optional[sqlite3.Row]:
+        """The open review item for ``claim_id`` with ``reason``, if any."""
+        return self.conn.execute(
+            "SELECT * FROM review_queue WHERE item_type = 'claim' AND claim_id = ? "
+            "AND reason = ? AND status = 'open'",
+            (claim_id, reason),
+        ).fetchone()
+
+    def get_review(self, review_id: int) -> Optional[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM review_queue WHERE id = ?", (review_id,)).fetchone()
+
+    def list_reviews(
+        self, *, status: str = "open", item_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[sqlite3.Row]:
+        """Review items, oldest first. ``status='all'`` lists every item."""
+        where, params = [], []
+        if status != "all":
+            where.append("status = ?")
+            params.append(status)
+        if item_type:
+            where.append("item_type = ?")
+            params.append(item_type)
+        sql = "SELECT * FROM review_queue"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        return self.conn.execute(sql + " ORDER BY id LIMIT ?", (*params, limit)).fetchall()
+
+    def resolve_review(
+        self, review_id: int, decision: str, *, resolved_by: str,
+        note: Optional[str] = None,
+    ) -> None:
+        """Record a decision on an open item: ``accepted`` (the item is
+        right as stored) or ``rejected`` (it is wrong). Recording a decision
+        changes nothing else; fixing a rejected item is a separate, explicit
+        step (supersede the claim, re-dispose the contradiction, undo the
+        alias, invalidate the concept)."""
+        if decision not in REVIEW_DECISIONS:
+            raise ValueError(
+                f"decision must be one of {REVIEW_DECISIONS}, got {decision!r}")
+        row = self.get_review(review_id)
+        if row is None:
+            raise LookupError(f"no review item {review_id}")
+        if row["status"] != "open":
+            raise ValueError(f"review item {review_id} is already {row['status']}")
+        with self.tx() as cx:
+            cur = cx.execute(
+                "UPDATE review_queue SET status = ?, resolved_at = ?, resolved_by = ?, "
+                "resolution_note = ? WHERE id = ? AND status = 'open'",
+                (decision, time.time(), resolved_by, note, review_id),
+            )
+            if cur.rowcount != 1:  # closed by someone else since we read it
+                raise ValueError(f"review item {review_id} is no longer open")
 
     def get_span_text(self, claim_id: int) -> Optional[str]:
         """Fetch the exact source text the claim points at."""

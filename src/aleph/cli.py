@@ -60,12 +60,38 @@ def cmd_ingest(args) -> int:
     for r in results:
         if r["status"] == "ingested":
             print(f"  + {r['path']}  ({r['claims_added']} claims, "
-                  f"{r['claims_dropped_ungrounded']} dropped)")
+                  f"{r['claims_dropped_ungrounded']} dropped, "
+                  f"{r['claims_flagged_fidelity']} flagged for review)")
         else:
             print(f"  . {r['path']}  [{r['status']}: {r.get('reason', '')}]")
+    ingested = [r for r in results if r["status"] == "ingested"]
+    if ingested:
+        tokens = sum(r["source_tokens_estimate"] for r in ingested)
+        costs = [r["cost_usd"] for r in ingested]
+        if any(r["llm_usage"] is None for r in ingested):
+            print("LLM cost: unknown (this LLM adapter doesn't report usage)")
+        elif any(c is None for c in costs):
+            print(f"LLM cost: unknown (no list price for model "
+                  f"{getattr(llm, 'model', '?')!r})")
+        elif not tokens:
+            print(f"LLM cost: ${sum(costs):.4f} (no source text)")
+        else:
+            total = sum(costs)
+            print(f"LLM cost: ${total:.4f} for ~{tokens:.0f} source tokens "
+                  f"(${total / tokens * 1000:.4f} per 1k; list price, "
+                  f"source tokens estimated as chars/4)")
     print()
     print(_fmt_stats(store.stats()))
     return 0
+
+
+def _verifier(args, llm):
+    """``--verifier layered`` opts into the layered verifier; the default
+    (``llm``) keeps ask's original span check."""
+    if getattr(args, "verifier", "llm") != "layered":
+        return None
+    from .verifier import LayeredVerifier, default_entailer
+    return LayeredVerifier(llm, entailer=default_entailer())
 
 
 def cmd_ask(args) -> int:
@@ -93,6 +119,7 @@ def cmd_ask(args) -> int:
         verify=not args.no_verify,
         use_cache=not args.no_cache,
         context=ctx,
+        verifier=_verifier(args, llm),
     )
     if args.json:
         print(json.dumps({
@@ -370,6 +397,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-cache", action="store_true", help="bypass view cache")
     p.add_argument("--context", help='JSON, e.g. \'{"jurisdiction":"US-CA","date":"2026-04-22"}\'')
     p.add_argument("--json", action="store_true", help="emit full structured result")
+    p.add_argument("--verifier", choices=["llm", "layered"], default="llm",
+                   help="claim-citation verifier: llm (default) or layered "
+                        "(deterministic -> entailment if ALEPH_ENTAILER=nli -> llm)")
     p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("show", parents=[common], help="show a claim or list claims")

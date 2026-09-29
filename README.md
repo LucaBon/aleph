@@ -207,6 +207,8 @@ python benchmark/run.py
 
 The first two run the existing end-to-end pipeline and CLI tests. The third runs the benchmark that produces the numbers in the [smoke test](#smoke-test).
 
+The verifier eval ([benchmark/verifier_eval/](benchmark/verifier_eval/)) measures false-accept and false-reject rates on labeled sentence/span pairs. Its current pairs are draft labels awaiting human review, so it produces no publishable rates yet.
+
 ## Commands
 
 **Agent-mode** (no API key, JSON in/out — what Claude Code calls). A handful are LLM-calling and do need `ANTHROPIC_API_KEY`; those are marked `(LLM)`.
@@ -222,12 +224,21 @@ source-yield [--thin-threshold F] per-source claims/KB diagnostic (triage)
 
 # claims
 claim-add --source-id N --subject S --predicate P --object O --span TEXT \
-          --confidence C [--conditions id:kind,id:kind,...]
-claim-get ID                     claim + its source span
+          --confidence C [--proposition SENTENCE] [--conditions id:kind,id:kind,...]
+                                 fidelity issues are reported and queued for review
+claim-get ID                     claim + its source span, proposition and context window
+claim-fidelity-check [ID | --all] [--enqueue]
+                                 numbers/dates/units/negations/entities vs span + context
 claim-search QUERY [-k N] [--compact|--fields id,predicate,...]   FTS5/LIKE
 claim-by-subject SUBJECT [--compact|--fields ...]                 alias-resolved
 claim-supersede OLD NEW          mark OLD as superseded
 subjects                         distinct subjects by count
+
+# review queue (claims, contradictions, concepts, aliases)
+review-list [--status open|accepted|rejected|obsolete|all] [--type T]
+review-add --type T (--id N | --alias FROM) [--reason R] [--note TEXT]
+review-resolve ID --decision accepted|rejected --by WHO [--note TEXT]
+                                 records the decision; fixing a rejected item is a separate step
 
 # aliases + store config
 alias-add FROM TO                declare FROM = TO; rewrites existing claims

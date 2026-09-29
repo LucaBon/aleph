@@ -18,6 +18,7 @@ import os
 import random
 import re
 import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -47,6 +48,65 @@ _DEFAULT_MAX_ATTEMPTS = int(os.environ.get("ALEPH_LLM_MAX_ATTEMPTS", "3"))
 _DEFAULT_BACKOFF_BASE = float(os.environ.get("ALEPH_LLM_BACKOFF_BASE", "0.5"))
 
 
+# First-party API list prices, USD per million tokens: (input, output).
+# Cache writes (5-minute TTL) bill at 1.25x input, cache reads at 0.1x input.
+# Taken from Anthropic's model/pricing table as cached 2026-06-24; re-check
+# before quoting costs. A model missing here reports cost as unknown (None)
+# rather than a guess.
+PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-opus-5": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
+    "claude-opus-4-7": (5.0, 25.0),
+    "claude-opus-4-6": (5.0, 25.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+}
+
+
+@dataclass
+class Usage:
+    """Token usage accumulated over an adapter's calls."""
+
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+    def add(self, **tokens) -> None:
+        self.calls += 1
+        for k, v in tokens.items():
+            setattr(self, k, getattr(self, k) + int(v or 0))
+
+    def minus(self, earlier: "Usage") -> "Usage":
+        return Usage(**{k: v - getattr(earlier, k) for k, v in asdict(self).items()})
+
+    def copy(self) -> "Usage":
+        return Usage(**asdict(self))
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def cost_usd(model: str, usage: Usage) -> Optional[float]:
+    """List-price cost of ``usage`` on ``model``, or None if the model's price
+    is unknown."""
+    price = PRICES_PER_MTOK.get(model)
+    if price is None:
+        return None
+    inp, out = price
+    return (
+        usage.input_tokens * inp
+        + usage.cache_creation_input_tokens * inp * 1.25
+        + usage.cache_read_input_tokens * inp * 0.1
+        + usage.output_tokens * out
+    ) / 1_000_000
+
+
 class LLM:
     def __init__(
         self,
@@ -61,6 +121,7 @@ class LLM:
         self.model = model
         self.max_attempts = max(1, max_attempts)
         self.backoff_base = backoff_base
+        self.usage = Usage()
 
     def _create(self, system: str, user: str, max_tokens: int):
         """Call messages.create with exponential-backoff retry on transient errors.
@@ -71,12 +132,21 @@ class LLM:
         last_err: Optional[Exception] = None
         for attempt in range(self.max_attempts):
             try:
-                return self.client.messages.create(
+                resp = self.client.messages.create(
                     model=self.model,
                     max_tokens=max_tokens,
                     system=system,
                     messages=[{"role": "user", "content": user}],
                 )
+                u = getattr(resp, "usage", None)
+                if u is not None:
+                    self.usage.add(**{
+                        k: getattr(u, k, 0)
+                        for k in ("input_tokens", "output_tokens",
+                                  "cache_creation_input_tokens",
+                                  "cache_read_input_tokens")
+                    })
+                return resp
             except _RETRYABLE as e:
                 last_err = e
                 if attempt == self.max_attempts - 1:
@@ -202,6 +272,7 @@ class MockLLM:
         # when they only touch .complete / .complete_json.
         self.max_attempts = 1
         self.backoff_base = 0.0
+        self.usage = Usage()  # canned responses cost nothing
 
     @staticmethod
     def _load(path: Path) -> list[dict]:

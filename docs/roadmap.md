@@ -17,8 +17,8 @@ This roadmap came out of an external review (September 2026). Phases are ordered
 | Removing a source invalidates cached views that cited it | **Yes** | e2e tests; smoke benchmark |
 | No view, concept or disposition survives a retraction (transitively) | **Yes** | `Store.check_invariants()` + `invariant-check` exist; every deactivation path (remove, supersede, retract, `retracted` disposition) runs one cascade that reopens dependent contradictions. `tests/test_invariants.py` (hypothesis, `pip install -e .[dev]`) passes 1000 examples × 60 steps, plus targeted scenarios. Mutation-checked: disabling revival, reopening or view invalidation makes it fail. `benchmark/canary.py` reports 0 leaks, 0 invariant violations and 0% over-invalidation. Both run in CI on every push (Python 3.10/3.12/3.14) |
 | Alias merges are reversible | **Yes** | `alias_events` merge log, `alias-undo`, and `alias-add` refuses to overwrite without `--force` and rejects cycles along the whole chain. Covered by property and scenario tests, run in CI on every push |
-| A claim faithfully represents its span (numbers, negation, scope) | **No** | Phase 2: fidelity checker + review queue |
-| The verifier's false-accept / false-reject rates are known | **No** | Phase 2: labeled eval set |
+| A claim faithfully represents its span (numbers, negation, scope) | **Partly** | Numbers, dates, units, negation and entities are checked deterministically against the span and its context window on every claim write, and flagged claims go to the review queue (`aleph.fidelity`, `review-list`). The checker flags every seeded mismatch in `tests/fixtures/fidelity_seeded.json` in CI. Scope and paraphrase errors are not checked, and flags don't block writes |
+| The verifier's false-accept / false-reject rates are known | **No** | The eval harness and a layered verifier exist (Phase 2), but the pair set has only draft labels, and neither verifier has been run on human labels |
 | Answers surface contradicting evidence they didn't use | **No** | Phase 3 |
 | Reviewers check Aleph answers faster *and* more accurately than RAG answers | **Unmeasured** | Phase 6: seeded-error user study |
 
@@ -41,7 +41,7 @@ The "83%" figure in earlier READMEs came from a fake-LLM run on six sentences. I
   - remove the hardcoded `/home/claude/aleph/...` paths from `tests/e2e_fake_llm.py` (done: none remain);
   - one command that runs both e2e scripts plus the pytest suite (done: `pytest` runs the property suite, both e2e scripts and the canary benchmark via `tests/test_scripts.py`);
   - CI that runs that command (done: `.github/workflows/ci.yml` runs `pytest` under the `thorough` profile on Python 3.10/3.12/3.14 on every push and pull request).
-- **Schema versioning** (done): a read-only `schema_version` config key and the numbered `MIGRATIONS` list in `db.py`. SCHEMA + `_run_alters` define version 1; an unversioned store is stamped 1, and a store from a newer aleph is refused (`schema_too_new`). `_run_alters` is still fine for adding columns, but Phase 2 (`proposition`) and Phase 4 (`features`) change what existing rows mean and go through `MIGRATIONS`.
+- **Schema versioning** (done): a read-only `schema_version` config key and the numbered `MIGRATIONS` list in `db.py`. SCHEMA + `_run_alters` define version 1; an unversioned store is stamped 1, and a store from a newer aleph is refused (`schema_too_new`). `_run_alters` is still fine for adding columns, but Phase 2 (`proposition`) and Phase 4 (`features`) change what existing rows mean and go through `MIGRATIONS`. Phase 2's is migration 2.
 
 **Exit criteria:** a fresh clone passes the full test command with no path edits, and CI runs it on every push.
 
@@ -68,7 +68,8 @@ A code review of the Phase 0–1 branch (PR #1) found more channels by which a d
 - `concept-validate` could revive superseded or invalidated concepts;
 - `source-unretract` revived claims a `retracted` disposition had dropped, and `source-authority-set` could flip retraction without the cascade;
 - `retract_source` and `source-replace` weren't atomic;
-- the predicate-alias cycle check only looked at the end of the chain.
+- the predicate-alias cycle check only looked at the end of the chain;
+- `alias-undo` restored an overwritten alias target without a cycle check. The `thorough` profile found this during the Phase 2 work (A→B overwritten to A→C, then B→A, then undo). The undo is now refused with `alias_would_cycle`.
 
 **Exit criteria:**
 - `tests/test_invariants.py` passes under the `thorough` profile (1000 examples × 60 steps) in CI.
@@ -84,11 +85,40 @@ A code review of the Phase 0–1 branch (PR #1) found more channels by which a d
 
 **Order within the phase:** build the eval set first and measure the current verifier on it, so the layered verifier is judged against a real baseline.
 
+**Status:** code in place (2026-09-28); the two eval exit criteria are open because they need human labels and a live-API run.
+
+- **Proposition and context window** (schema migration 2): `claims.proposition` holds the claim as a sentence, and `context_start`/`context_end` hold the enclosing sentence plus one neighbour on each side, never crossing a paragraph break. Migration 2 backfills context windows for existing claims and leaves their proposition NULL rather than inventing one from the triple. `claim-add --proposition`, and ingest's extraction prompt now asks for one.
+- **Fidelity checker** (`aleph/fidelity.py`): runs on every claim write. Flags go to the review queue; they never refuse a write. `claim-fidelity-check [ID | --all] [--enqueue]` re-checks existing claims. It was tried on a migrated copy of a local store built from `corpus/` (the store isn't in the repo). It flagged 49 of 198 claims:
+
+- 30 number issues;
+- 19 negation issues (9 added, 10 dropped);
+- 10 entity issues;
+- 4 date issues.
+
+Many of the flags are objects that carry article numbers, years or citations the span doesn't contain. None of them has been triaged into real findings and false positives yet.
+- **Review queue** (`review_queue`; `review-list`, `review-add`, `review-resolve`): holds claims, contradictions, concepts and aliases. Recording a decision changes nothing else. Reviews cascade with their target, and `alias-undo` closes alias reviews as `obsolete` (checked by `check_invariants`).
+- **Layered verifier** (`aleph/verifier.py`) runs three layers, and each layer decides or passes. (1) Deterministic: a verbatim restatement of the whole span is SUPPORTED; an added number, date, unit or negation is UNSUPPORTED. (2) Optional NLI entailment (`ALEPH_ENTAILER=nli`). (3) LLM. `ask --verifier layered` opts in, and it bypasses the view cache. It stays opt-in until the eval shows it beats the baseline.
+- **Eval harness** (`python -m aleph.verifier_eval`, [benchmark/verifier_eval/](../benchmark/verifier_eval/)): the pair format, a labeling rule, false-accept/false-reject/uncertain rates, and runners for `baseline`, `layered` and `deterministic`. `pairs.jsonl` has 49 **draft** pairs written and labeled by Claude. The draft set is a harness fixture, not the eval set. The 200–300 human-labeled pairs are still to do.
+- **Ingest cost**: every ingest result reports token usage, list-price cost, and cost per 1k source tokens. Source tokens are estimated as chars / 4. A model with no known price reports cost as unknown.
+
+A code review of this branch found several defects, each now fixed with a regression test:
+
+- the deterministic layer accepted verbatim fragments of a negated span;
+- decimal points were dropped when comparing numbers;
+- the ingest cost report left out the `--extract-conditions` pass;
+- accepted reviews were re-queued;
+- alias reviews outlived the merge they were filed on;
+- layered and default `ask` shared cached views;
+- multi-citation sentences were rejected;
+- migration 2 was not atomic.
+
+Also fixed: `_init_fts` never backfilled a store created before FTS existed, because `SELECT rowid FROM claims_fts` reads the content table rather than the index. The next UPDATE on such a store corrupted the index. It now rebuilds when the index's docsize count differs from the claims count.
+
 **Exit criteria:**
 - Baseline and new false-accept / false-reject rates are published.
 - The layered verifier's false-accept rate is lower than the baseline's, and its false-reject rate isn't worse.
-- The fidelity checker flags every seeded number, date, negation or entity mismatch in a fixture set.
-- Ingest reports its LLM cost per 1k source tokens, so the cost of extraction is known before Phase 6.
+- The fidelity checker flags every seeded number, date, negation or entity mismatch in a fixture set. **Met for the fixture:** 25 seeded cases and 12 faithful controls in `tests/test_fidelity.py` run in CI. The seeded cases include decimal shifts (9.0 vs 90), scale words (million vs billion), reordered ISO dates, and a negation that sits elsewhere in the span. The checks are lexical, so the fixture can't prove coverage beyond these patterns.
+- Ingest reports its LLM cost per 1k source tokens, so the cost of extraction is known before Phase 6. **Reporting in place;** not yet run against the live API on `corpus/`.
 
 ### Phase 3: Omission-aware retrieval and scalable contradictions
 - Hybrid FTS + embedding retrieval (RRF).

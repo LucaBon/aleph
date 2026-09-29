@@ -1,0 +1,228 @@
+{
+ "_doc": "Phase 2 fidelity fixture. Each case pairs a claim with the span (and optional context window) it cites. `seeded` names the mismatch kind deliberately introduced into the claim, or null for a faithful control. Exit criterion: the checker flags every seeded case with an issue of that kind and flags no control.",
+ "cases": [
+  {
+   "id": "num-01",
+   "seeded": "number",
+   "span": "Model S packs retain about 90% of their original capacity after 200,000 miles.",
+   "claim": "Model S packs retain about 80% of their original capacity after 200,000 miles."
+  },
+  {
+   "id": "num-02",
+   "seeded": "number",
+   "span": "The trial enrolled 1,204 patients across 14 sites.",
+   "claim": "The trial enrolled 1,240 patients across 14 sites."
+  },
+  {
+   "id": "num-03",
+   "seeded": "number",
+   "span": "La pena è della reclusione da sei mesi a 3,5 anni.",
+   "claim": "La pena è della reclusione fino a 4,5 anni."
+  },
+  {
+   "id": "num-04",
+   "seeded": "number",
+   "span": "Context windows grew from 2k tokens to 128k tokens between the two model generations.",
+   "claim": "Context windows grew to 200k tokens."
+  },
+  {
+   "id": "date-01",
+   "seeded": "date",
+   "span": "The v2 API was released in March 2021 and deprecated v1 endpoints.",
+   "claim": "The v2 API was released in March 2022."
+  },
+  {
+   "id": "date-02",
+   "seeded": "date",
+   "span": "Records are deleted after 2019-06-30 unless a legal hold applies.",
+   "claim": "Records are deleted after 2019-07-30 unless a legal hold applies."
+  },
+  {
+   "id": "date-03",
+   "seeded": "date",
+   "span": "The v2 API was released in March 2021 and deprecated v1 endpoints.",
+   "claim": "The v2 API was released in April 2021."
+  },
+  {
+   "id": "date-04",
+   "seeded": "date",
+   "span": "La legge è entrata in vigore il 15/03/2018.",
+   "claim": "La legge è entrata in vigore il 16/03/2018."
+  },
+  {
+   "id": "unit-01",
+   "seeded": "unit",
+   "span": "The pack weighs 540 kg and delivers 100 kWh.",
+   "claim": "The pack weighs 540 lb."
+  },
+  {
+   "id": "unit-02",
+   "seeded": "unit",
+   "span": "Median latency fell by 40 ms after the cache was added.",
+   "claim": "Median latency fell by 40% after the cache was added."
+  },
+  {
+   "id": "neg-01",
+   "seeded": "negation",
+   "span": "Scaling the model did not improve accuracy on the reasoning benchmark.",
+   "claim": "Scaling the model improved accuracy on the reasoning benchmark."
+  },
+  {
+   "id": "neg-02",
+   "seeded": "negation",
+   "span": "Backups are retained for 30 days.",
+   "claim": "Backups are not retained for 30 days."
+  },
+  {
+   "id": "neg-03",
+   "seeded": "negation",
+   "span": "Il fatto non costituisce reato se commesso per legittima difesa.",
+   "claim": "Il fatto costituisce reato se commesso per legittima difesa."
+  },
+  {
+   "id": "neg-04",
+   "seeded": "negation",
+   "span": "The endpoint never returns partial results.",
+   "claim": "The endpoint returns partial results."
+  },
+  {
+   "id": "ent-01",
+   "seeded": "entity",
+   "span": "The study was run by researchers at Stanford and funded by the NIH.",
+   "claim": "The study was run by researchers at Berkeley."
+  },
+  {
+   "id": "ent-02",
+   "seeded": "entity",
+   "span": "Chinchilla was trained on 1.4 trillion tokens.",
+   "claim": "Gopher was trained on 1.4 trillion tokens."
+  },
+  {
+   "id": "ent-03",
+   "seeded": "entity",
+   "span": "The regulation applies to controllers established in the European Union.",
+   "claim": "The regulation applies to controllers established in the United Kingdom."
+  },
+  {
+   "id": "num-05",
+   "seeded": "number",
+   "span": "Model S packs retain about 90% of their original capacity.",
+   "claim": "Model S packs retain about 9.0% of their original capacity."
+  },
+  {
+   "id": "num-06",
+   "seeded": "number",
+   "span": "The dose was 0.5 kg per batch.",
+   "claim": "The dose was 5 kg per batch."
+  },
+  {
+   "id": "num-07",
+   "seeded": "number",
+   "span": "Il tasso è salito all'1,5%.",
+   "claim": "Il tasso è salito al 15%."
+  },
+  {
+   "id": "num-08",
+   "seeded": "number",
+   "span": "Revenue reached 5 million dollars.",
+   "claim": "Revenue reached 5 billion dollars."
+  },
+  {
+   "id": "date-05",
+   "seeded": "date",
+   "span": "The patch shipped on 2020-03-04.",
+   "claim": "The patch shipped on 2020-04-03."
+  },
+  {
+   "id": "ent-04",
+   "seeded": "entity",
+   "span": "Use the v2 endpoint.",
+   "claim": "Use the v21 endpoint."
+  },
+  {
+   "id": "neg-05",
+   "seeded": "negation",
+   "span": "Y is not tested; X is safe.",
+   "claim": "X is not safe."
+  },
+  {
+   "id": "neg-06",
+   "seeded": "negation",
+   "span": "The cache doesn’t expire.",
+   "claim": "The cache expires."
+  },
+  {
+   "id": "ok-01",
+   "seeded": null,
+   "span": "Model S packs retain about 90% of their original capacity after 200,000 miles.",
+   "claim": "Model S packs retain about 90 percent of their capacity after 200000 miles."
+  },
+  {
+   "id": "ok-02",
+   "seeded": null,
+   "span": "La pena è della reclusione da sei mesi a 3,5 anni.",
+   "claim": "La pena massima è di 3,5 anni di reclusione."
+  },
+  {
+   "id": "ok-03",
+   "seeded": null,
+   "span": "Scaling the model did not improve accuracy on the reasoning benchmark.",
+   "claim": "Scaling the model didn't improve reasoning accuracy."
+  },
+  {
+   "id": "ok-04",
+   "seeded": null,
+   "span": "The v2 API was released in March 2021 and deprecated v1 endpoints.",
+   "claim": "The v2 API deprecated v1 endpoints."
+  },
+  {
+   "id": "ok-05",
+   "seeded": null,
+   "span": "It was funded by the NIH.",
+   "context": "The study was run by researchers at Stanford. It was funded by the NIH. Results were published in 2020.",
+   "claim": "The Stanford study was funded by the NIH."
+  },
+  {
+   "id": "ok-06",
+   "seeded": null,
+   "span": "Il fatto non costituisce reato se commesso per legittima difesa.",
+   "claim": "Il fatto commesso per legittima difesa non costituisce reato."
+  },
+  {
+   "id": "ok-07",
+   "seeded": null,
+   "span": "Records are deleted after 2019-06-30 unless a legal hold applies.",
+   "claim": "Records are deleted after 2019-06-30."
+  },
+  {
+   "id": "ok-08",
+   "seeded": null,
+   "span": "The pack weighs 540 kg and delivers 100 kWh.",
+   "claim": "The pack delivers 100 kWh."
+  },
+  {
+   "id": "ok-09",
+   "seeded": null,
+   "span": "Backups are retained for 30 days.",
+   "claim": "Backups are retained for 30 days."
+  },
+  {
+   "id": "ok-10",
+   "seeded": null,
+   "span": "The fund holds 1,000,000 shares.",
+   "claim": "The fund holds 1000000 shares."
+  },
+  {
+   "id": "ok-11",
+   "seeded": null,
+   "span": "Il tasso è salito all'1,5%.",
+   "claim": "Il tasso è salito all'1.5%."
+  },
+  {
+   "id": "ok-12",
+   "seeded": null,
+   "span": "Revenue reached 5 million dollars.",
+   "claim": "Revenue reached 5 million dollars."
+  }
+ ]
+}
