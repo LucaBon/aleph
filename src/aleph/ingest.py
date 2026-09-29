@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from .db import Store
-from .llm import LLM
+from .llm import LLM, cost_usd
 from .log import log
 
 EXTRACT_SYSTEM = """You extract atomic claims from source documents.
@@ -31,6 +31,7 @@ Prefer specific subjects ("lithium-ion batteries in Model S") over generic ones
 
 Emit a JSON array. Each item has:
 {
+  "proposition": "string, the claim as one self-contained sentence, keeping every number, date, unit, negation and name exactly as the source states them",
   "subject": "string, lowercased noun phrase naming the entity",
   "predicate": "string, lowercased verb phrase",
   "object": "string, the specific value or fact",
@@ -145,12 +146,16 @@ def ingest_file(store: Store, llm: LLM, path: Path, verbose: bool = False, extra
     if source_id is None:
         return {"path": str(path), "status": "skipped", "reason": "already ingested"}
 
+    # Snapshot before any LLM call, the conditions pre-pass included.
+    usage_before = llm.usage.copy() if hasattr(llm, "usage") else None
+
     # WS-D: pre-pass to extract scope/method/sample/etc. claims
     scope_claim_ids: list[tuple[int, str]] = []  # (claim_id, kind)
     if extract_conditions:
         scope_claim_ids = _extract_scope_claims(store, llm, source_id, text)
 
     total_claims = 0
+    flagged = 0
     dropped = 0
     dropped_details: list[dict] = []
     chunks = _chunk_text(text)
@@ -187,6 +192,7 @@ def ingest_file(store: Store, llm: LLM, path: Path, verbose: bool = False, extra
                 obj = str(item["object"]).strip()
                 span_text = str(item.get("span", "")).strip()
                 conf = float(item.get("confidence", 0.7))
+                proposition = str(item.get("proposition") or "").strip() or None
             except (KeyError, TypeError, ValueError) as e:
                 dropped += 1
                 dropped_details.append({
@@ -244,8 +250,11 @@ def ingest_file(store: Store, llm: LLM, path: Path, verbose: bool = False, extra
                 )
                 continue
             start, end = located
-            atomic_claim_id = store.add_claim(source_id, subj, pred, obj, start, end, conf)
+            atomic_claim_id = store.add_claim(source_id, subj, pred, obj, start, end, conf,
+                                              proposition=proposition)
             total_claims += 1
+            if store.open_claim_review(atomic_claim_id, "fidelity"):
+                flagged += 1
             # WS-D: link every scope claim as a condition of this atomic claim
             if extract_conditions and scope_claim_ids:
                 from . import conditions as _cond_mod
@@ -259,14 +268,38 @@ def ingest_file(store: Store, llm: LLM, path: Path, verbose: bool = False, extra
         "source_id": source_id,
         "chunks": len(chunks),
         "claims_added": total_claims,
+        "claims_flagged_fidelity": flagged,
         "claims_dropped_ungrounded": dropped,
         "dropped": dropped_details,
     }
+    result.update(_cost_report(llm, usage_before, text))
     # WS-D: include scope claim info when extract_conditions was used
     if extract_conditions:
         result["scope_claims_added"] = len(scope_claim_ids)
         result["scope_claim_ids"] = [sid for sid, _kind in scope_claim_ids]
     return result
+
+
+def _cost_report(llm, usage_before, text: str) -> dict:
+    """LLM usage and list-price cost of this ingest, per 1k source tokens.
+    Source tokens are estimated as chars / 4 (no network token count)."""
+    source_tokens = len(text) / 4
+    report = {
+        "llm_usage": None,
+        "cost_usd": None,
+        "source_chars": len(text),
+        "source_tokens_estimate": source_tokens,
+        "cost_per_1k_source_tokens": None,
+    }
+    if usage_before is None:
+        return report
+    usage = llm.usage.minus(usage_before)
+    report["llm_usage"] = usage.to_dict()
+    cost = cost_usd(getattr(llm, "model", ""), usage)
+    report["cost_usd"] = cost
+    if cost is not None and source_tokens:
+        report["cost_per_1k_source_tokens"] = cost / source_tokens * 1000
+    return report
 
 
 # ----- WS-D scope extraction (opt-in via extract_conditions=True) -----

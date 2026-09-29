@@ -291,6 +291,7 @@ def cmd_claim_add(args, store: Store) -> int:
         span_start=start,
         span_end=end,
         confidence=args.confidence,
+        proposition=getattr(args, "proposition", None),
     )
     # WS-D: optional --conditions flag (legacy colon form or JSON, same parser as --support)
     conditions_arg = getattr(args, "conditions", None)
@@ -327,13 +328,18 @@ def cmd_claim_add(args, store: Store) -> int:
 
     row = store.get_claim(claim_id)
     store.clear_cache()
+    # Fidelity issues flag the claim for review; they never refuse it.
+    flag = store.open_claim_review(claim_id, "fidelity")
     _ok({
         "claim_id": claim_id,
         "subject": row["subject"],   # normalized/canonical form
         "predicate": row["predicate"],
         "object": row["object"],
+        "proposition": row["proposition"],
         "span_start": start,
         "span_end": end,
+        "fidelity_issues": json.loads(flag["details"])["issues"] if flag else [],
+        "review_id": flag["id"] if flag else None,
     })
     return 0
 
@@ -359,7 +365,115 @@ def cmd_claim_get(args, store: Store) -> int:
         "span_start": row["span_start"],
         "span_end": row["span_end"],
         "span_text": span,
+        "proposition": row["proposition"],
+        "context_start": row["context_start"],
+        "context_end": row["context_end"],
+        "context_text": store.get_context_text(args.claim_id),
     })
+    return 0
+
+
+def cmd_claim_fidelity_check(args, store: Store) -> int:
+    """Re-run the deterministic fidelity checker on one claim or on every
+    active claim; ``--enqueue`` queues flagged claims for review."""
+    if args.all:
+        ids = [r["id"] for r in store.all_active_claims()]
+    elif args.claim_id is not None:
+        if not store.get_claim(args.claim_id):
+            _err("claim_not_found", f"no claim with id {args.claim_id}",
+                 claim_id=args.claim_id)
+            return 1
+        ids = [args.claim_id]
+    else:
+        _err("missing_target", "pass a CLAIM_ID or --all")
+        return 1
+    flagged = []
+    for cid in ids:
+        issues = [i.to_dict() for i in store.check_claim_fidelity(cid)]
+        if not issues:
+            continue
+        entry = {"claim_id": cid, "issues": issues}
+        if args.enqueue:
+            entry["review_id"] = store.enqueue_review(
+                "claim", cid, reason="fidelity", details={"issues": issues})
+        flagged.append(entry)
+    _ok({"checked": len(ids), "flagged": flagged})
+    return 0
+
+
+def _review_dict(row) -> dict:
+    target = {
+        "claim": {"claim_id": row["claim_id"]},
+        "contradiction": {"contradiction_id": row["contradiction_id"]},
+        "concept": {"concept_id": row["concept_id"]},
+        "alias": {"alias_from": row["alias_from"]},
+    }[row["item_type"]]
+    return {
+        "review_id": row["id"],
+        "item_type": row["item_type"],
+        "target": target,
+        "reason": row["reason"],
+        "details": json.loads(row["details"] or "{}"),
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "resolved_at": row["resolved_at"],
+        "resolved_by": row["resolved_by"],
+        "resolution_note": row["resolution_note"],
+    }
+
+
+# What to do after rejecting an item: recording the decision fixes nothing.
+_REJECT_NEXT_STEP = {
+    "claim": "supersede the claim with a corrected one (claim-add, then claim-supersede)",
+    "contradiction": "re-dispose it (contradiction-dispose)",
+    "concept": "invalidate or rebuild it (concept-invalidate / concept-rebuild)",
+    "alias": "undo the merge (alias-undo)",
+}
+
+
+def cmd_review_list(args, store: Store) -> int:
+    rows = store.list_reviews(status=args.status, item_type=args.type, limit=args.limit)
+    _ok({"items": [_review_dict(r) for r in rows]})
+    return 0
+
+
+def cmd_review_add(args, store: Store) -> int:
+    wants_alias = args.type == "alias"
+    if wants_alias != (args.alias is not None) or wants_alias == (args.id is not None):
+        _err("invalid_review_target",
+             "use --alias FROM for alias items and --id N for the others",
+             item_type=args.type)
+        return 1
+    target = args.alias if args.type == "alias" else args.id
+    details = {"note": args.note} if args.note else {}
+    try:
+        rid = store.enqueue_review(args.type, target, reason=args.reason, details=details)
+    except LookupError as e:
+        _err("review_target_not_found", str(e), item_type=args.type, target=target)
+        return 1
+    _ok(_review_dict(store.get_review(rid)))
+    return 0
+
+
+def cmd_review_resolve(args, store: Store) -> int:
+    row = store.get_review(args.review_id)
+    if row is None:
+        _err("review_not_found", f"no review item {args.review_id}",
+             review_id=args.review_id)
+        return 1
+    if args.decision not in ("accepted", "rejected"):
+        _err("invalid_decision", "decision must be accepted or rejected",
+             decision=args.decision)
+        return 1
+    if row["status"] != "open":
+        _err("review_not_open", f"review item {args.review_id} is already {row['status']}",
+             review_id=args.review_id, status=row["status"])
+        return 1
+    store.resolve_review(args.review_id, args.decision, resolved_by=args.by, note=args.note)
+    out = _review_dict(store.get_review(args.review_id))
+    if args.decision == "rejected":
+        out["next_step"] = _REJECT_NEXT_STEP[row["item_type"]]
+    _ok(out)
     return 0
 
 
@@ -490,6 +604,12 @@ def cmd_alias_add(args, store: Store) -> int:
 
 def cmd_alias_undo(args, store: Store) -> int:
     result = store.undo_alias(args.from_subject)
+    if not result["undone"] and result["note"] == "would-create-cycle":
+        _err("alias_would_cycle",
+             f"restoring {result['alias_from']} -> {result['restore_to']} would create "
+             "an alias cycle; undo the alias that leads back first",
+             from_canonical=result["alias_from"], restore_to=result["restore_to"])
+        return 1
     if not result["undone"]:
         _err("alias_not_found", "no live alias merge for this subject",
              from_canonical=result["alias_from"])
@@ -2331,7 +2451,46 @@ def register_agent_commands(subparsers, common) -> set[str]:
     # WS-D: optional --conditions flag
     p.add_argument("--conditions", default=None,
                    help="comma-separated condition_claim_id:kind pairs")
+    p.add_argument("--proposition", default=None,
+                   help="the claim as one self-contained sentence; the triple "
+                        "stays as its index. Checked for fidelity with the triple's "
+                        "fallback when omitted")
     p.set_defaults(func=cmd_claim_add)
+
+    p = _add("claim-fidelity-check",
+             help="check claims' numbers/dates/units/negations/entities against "
+                  "their span and context")
+    p.add_argument("claim_id", type=int, nargs="?", default=None)
+    p.add_argument("--all", action="store_true", help="check every active claim")
+    p.add_argument("--enqueue", action="store_true",
+                   help="queue flagged claims for review")
+    p.set_defaults(func=cmd_claim_fidelity_check)
+
+    p = _add("review-list", help="list review-queue items (default: open)")
+    p.add_argument("--status", default="open",
+                   choices=["open", "accepted", "rejected", "obsolete", "all"])
+    p.add_argument("--type", default=None,
+                   choices=["claim", "contradiction", "concept", "alias"])
+    p.add_argument("--limit", type=int, default=100)
+    p.set_defaults(func=cmd_review_list)
+
+    p = _add("review-add", help="queue a claim, contradiction, concept or alias for review")
+    p.add_argument("--type", required=True,
+                   choices=["claim", "contradiction", "concept", "alias"])
+    p.add_argument("--id", type=int, default=None,
+                   help="claim / contradiction / concept id")
+    p.add_argument("--alias", default=None, help="the alias's FROM subject")
+    p.add_argument("--reason", default="manual")
+    p.add_argument("--note", default=None)
+    p.set_defaults(func=cmd_review_add)
+
+    p = _add("review-resolve",
+             help="record accepted/rejected on an open review item (changes nothing else)")
+    p.add_argument("review_id", type=int)
+    p.add_argument("--decision", required=True, help="accepted | rejected")
+    p.add_argument("--by", required=True, help="who decided (attestor identifier)")
+    p.add_argument("--note", default=None)
+    p.set_defaults(func=cmd_review_resolve)
 
     p = _add("claim-get", help="get a claim with its span text")
     p.add_argument("claim_id", type=int)

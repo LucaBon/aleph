@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from aleph.db import SCHEMA_VERSION
+
 
 def _exec(db, *args):
     cmd = ["aleph", "--db", str(db), *args]
@@ -1100,7 +1102,7 @@ def locale_regression():
 
         # schema_version: recorded on open, readable, never writable
         r = run(db, "config-get", "schema_version")
-        assert r["value"] == "1", r
+        assert r["value"] == str(SCHEMA_VERSION), r
         err = run_err(db, "config-set", "schema_version", "99")
         assert err["code"] == "readonly_config_key", err
         print("  schema OK: schema_version recorded and read-only")
