@@ -273,7 +273,10 @@ def test_layered_and_default_ask_do_not_share_cached_views(tmp_path):
         layered = query(store, llm, "model s pack capacity", verifier=LayeredVerifier(llm))
         assert not layered.from_cache
         assert layered.citations[0].verdict == "UNGROUNDED"
-        assert query(store, llm, "model s pack capacity").from_cache
+        again = query(store, llm, "model s pack capacity")
+        assert again.from_cache
+        # the layered run must not have overwritten the default view
+        assert "Verifier flags" not in again.answer
     finally:
         store.close()
 

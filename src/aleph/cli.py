@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 import os
 import sys
 from pathlib import Path
@@ -10,7 +11,7 @@ from pathlib import Path
 from .agent_cli import cmd_report_agent, register_agent_commands
 from .db import SchemaVersionError, Store
 from .ingest import ingest_paths
-from .lint import lint as lint_cmd, resolve_by_recency
+from .lint import lint as lint_cmd, resolve_by_source_date
 from .llm import LLM, MockLLM, DEFAULT_MODEL
 from .query import query as query_cmd
 
@@ -120,12 +121,15 @@ def cmd_ask(args) -> int:
         use_cache=not args.no_cache,
         context=ctx,
         verifier=_verifier(args, llm),
+        expand=not args.no_expand,
     )
     if args.json:
         print(json.dumps({
             "query": result.query,
             "answer": result.answer,
             "claim_ids_used": result.claim_ids_used,
+            "claim_ids_unused": result.claim_ids_unused,
+            "counter_evidence": result.counter_evidence,
             "from_cache": result.from_cache,
             "citations": [
                 {"sentence": c.sentence, "claim_ids": c.claim_ids,
@@ -140,6 +144,16 @@ def cmd_ask(args) -> int:
         if result.claim_ids_used:
             print(f"\n_used claims: {', '.join(str(i) for i in result.claim_ids_used[:20])}"
                   f"{'...' if len(result.claim_ids_used) > 20 else ''}_")
+        if result.claim_ids_unused:
+            print(f"_considered but not cited: "
+                  f"{', '.join(str(i) for i in result.claim_ids_unused[:20])}"
+                  f"{'...' if len(result.claim_ids_unused) > 20 else ''}_")
+        if result.counter_evidence:
+            print("\n**Counter-evidence not cited:**")
+            for ce in result.counter_evidence:
+                print(f"- [claim:{ce['counter_claim_id']}] conflicts with cited "
+                      f"[claim:{ce['cited_claim_id']}] "
+                      f"({ce['disposition']}, contradiction {ce['contradiction_id']})")
     return 0
 
 
@@ -206,8 +220,12 @@ def cmd_lint(args) -> int:
             print(f"  [{b['id']}] {b['subject']} — {b['predicate']} — {b['object']!r}")
             print()
     if args.resolve_by_recency:
-        n = resolve_by_recency(store)
-        print(f"resolved {n} contradictions by recency (newer supersedes older)")
+        r = resolve_by_source_date(store)
+        print(f"resolved {r['resolved']} contradictions by source date "
+              f"(legal pairs by authority, then specificity, then date)")
+        if r["skipped"]:
+            reasons = Counter(s["reason"] for s in r["skipped"])
+            print("left open: " + ", ".join(f"{n} {why}" for why, n in sorted(reasons.items())))
     return 0
 
 
@@ -397,6 +415,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-cache", action="store_true", help="bypass view cache")
     p.add_argument("--context", help='JSON, e.g. \'{"jurisdiction":"US-CA","date":"2026-04-22"}\'')
     p.add_argument("--json", action="store_true", help="emit full structured result")
+    p.add_argument("--no-expand", action="store_true",
+                   help="don't add claims that conflict with or condition retrieved ones")
     p.add_argument("--verifier", choices=["llm", "layered"], default="llm",
                    help="claim-citation verifier: llm (default) or layered "
                         "(deterministic -> entailment if ALEPH_ENTAILER=nli -> llm)")
@@ -417,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("lint", parents=[common], help="scan for contradictions")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--resolve-by-recency", action="store_true",
-                   help="auto-supersede older claim when contradictions detected")
+                   help="supersede the claim from the older source (by source date; legal pairs by authority); undated pairs stay open")
     p.set_defaults(func=cmd_lint)
 
     p = sub.add_parser("stats", parents=[common], help="print stats about the knowledge base")

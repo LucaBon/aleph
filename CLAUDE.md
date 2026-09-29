@@ -45,8 +45,8 @@ Both e2e scripts import the installed `aleph` package, so run `pip install -e .[
 ### API-mode commands (require `ANTHROPIC_API_KEY`)
 ```bash
 aleph ingest PATH [PATH ...] [--extract-conditions]  # recurses; .txt/.md/.markdown only
-aleph ask "question" [-k 30] [--no-verify] [--no-cache] [--json] [--context JSON] [--verifier llm|layered]
-aleph lint [--resolve-by-recency]
+aleph ask "question" [-k 30] [--no-verify] [--no-cache] [--json] [--context JSON] [--verifier llm|layered] [--no-expand]
+aleph lint [--resolve-by-recency]   # by source date; legal: level, then date; mixed-domain / cross-jurisdiction / lex-specialis / cross-subject / undated pairs stay open
 aleph show [CLAIM_ID] [--limit 50]
 aleph sources
 aleph remove SOURCE_ID
@@ -57,6 +57,7 @@ Global flags: `--db PATH` (default: `./aleph.db` if it exists, else `~/.aleph/al
 
 - `ingest` reports per file: claims added, dropped (ungrounded) and flagged for fidelity review, LLM token usage, list-price cost, and cost per 1k source tokens (source tokens estimated as chars / 4; unknown model price ⇒ cost `None`, never a guess). Prices live in `PRICES_PER_MTOK` in [llm.py](src/aleph/llm.py).
 - `--verifier layered` swaps ask's claim-citation check for the layered verifier (see "Claim fidelity and the layered verifier" below). Default stays `llm` until the verifier eval shows the layered one is better.
+- `ask` also reports `claim_ids_unused` (shown to the synthesizer, not cited) and `counter_evidence` (uncited sides of live conflicts with cited claims), both recomputed on every read including cache hits. `--no-expand`, `--no-verify` and a non-default `--verifier` build a view that is neither read from nor written to the cache.
 - `--extract-conditions` runs a pre-pass that extracts scope/method/sample/limitation/assumption claims from the whole document, then links every atomic claim from the same source to the whole scope set as `explicit=True` conditions. Opt-in (off by default).
 - `--context` accepts a JSON object with optional keys `{jurisdiction, date, domain, include_retracted}`. Claims are filtered by source metadata before synthesis: retracted claims are dropped unless `include_retracted`; jurisdiction matches exact or dotted-prefix (`US-CA` keeps `US-CA-LA`); `date` (ISO or epoch) is compared against `effective_at`/`expires_at` on the source; `domain` matches `source_metadata.domain`. The cache key is `sha256(question || json(context, sort_keys=True))`, so different contexts cache independently.
 
@@ -74,7 +75,7 @@ Grouped by workstream:
 - **Concepts (WS-A)** — `concept-add` (accepts legacy colon OR JSON `--support`), `concept-derive` (LLM), `concept-get`, `concept-list`, `concept-validate` (LLM), `concept-rebuild` (LLM), `concept-attest` (P1.2: agent-driven `draft → attested` with attestor trail), `concept-supersede`, `concept-invalidate`.
 - **Source authority (WS-C)** — `source-authority-set` (metadata includes optional `fetch_method` + `provenance_notes`), `source-authority-get`, `source-list-by-domain`, `source-retract` (scientific only), `source-unretract`.
 - **Claim conditions (WS-D)** — `claim-condition-add`, `claim-condition-remove`, `claim-conditions-list`, `claim-condition-extract` (LLM).
-- **Diagnostics / agent-mode synthesis** — `invariant-check` (reports every view/concept/resolution/supersession resting on an inactive claim; see "The retraction cascade" below), `provenance CLAIM_ID` (one-shot claim→source→authority→conditions→concepts→contradictions walk; P2.4), `compose --query "…"` (retrieval + disposition brief without an LLM, the agent-mode counterpart to `ask`; P2.5), `report-json` (full diagnostic snapshot; P2.2).
+- **Diagnostics / agent-mode synthesis** — `counter-evidence --claim-ids CSV` (uncited sides of open/dispute/gap conflicts with the claims an answer cites), `invariant-check` (reports every view/concept/resolution/supersession resting on an inactive claim; see "The retraction cascade" below), `provenance CLAIM_ID` (one-shot claim→source→authority→conditions→concepts→contradictions walk; P2.4), `compose --query "…" [--no-expand]` (retrieval + expansion + disposition brief without an LLM, the agent-mode counterpart to `ask`; P2.5; each claim carries `included_because`, dispositions include `unresolved`), `report-json` (full diagnostic snapshot; P2.2).
 - **Views** — `view-get`, `view-cache`, `cache-clear`.
 - **Stats** — `stats-json`.
 - **Store config** — `config-get [KEY]`, `config-set KEY VALUE` (currently `locale`).
@@ -112,6 +113,13 @@ python -m aleph.verifier_eval --pairs benchmark/verifier_eval/pairs.jsonl \
     --verifier deterministic|baseline|layered [--mock-llm F] [--out R.json]
 ```
 `deterministic` needs no key; `baseline` (ask's default check) and `layered` call the LLM. The shipped pairs carry draft labels (`labeler: draft:claude`), so reports say `labels_status: draft` and their rates are not publishable; see [benchmark/verifier_eval/README.md](benchmark/verifier_eval/README.md).
+
+### Retrieval eval (Phase 3)
+```bash
+python -m aleph.retrieval_eval (--db aleph.db | --from-ground-truth benchmark/ground_truth.json) \
+    --queries Q.jsonl --retriever fts,keyword,embedding,hybrid -k 10 [--out R.json]
+```
+Recall@k with relevant claims named by `source` + `span_contains`. Shipped query sets are draft-labeled; see [benchmark/retrieval_eval/README.md](benchmark/retrieval_eval/README.md).
 
 ### Environment
 - `ANTHROPIC_API_KEY` — required for the `LLM_COMMANDS` set (API-mode `ingest`/`ask`/`lint` plus the agent-mode LLM-calling commands listed above). Gated in [cli.py:263](src/aleph/cli.py#L263).
@@ -162,13 +170,15 @@ Concepts have a looser analog: the validator prompt requires every factual eleme
 The pipeline is always `SYNTHESIZE_V2` — v1 prompts are kept in the file for reference only.
 
 1. **Cache check** — hash is `sha256(question.lower().strip() || json(context, sort_keys=True))`. Hit returns immediately, including both `claim_ids` and `concept_ids`.
-2. **Retrieve claims** — `Retriever.search(keywords, limit)` from [retrieval.py](src/aleph/retrieval.py). Defaults to `FTSRetriever` (SQLite FTS5 + BM25) when the store has `claims_fts` available, else `KeywordRetriever` (LIKE-based scoring). Plug in a different backend by passing an explicit `retriever=` — the rest of the pipeline is agnostic.
+2. **Retrieve claims** — `Retriever.search(keywords, limit)` from [retrieval.py](src/aleph/retrieval.py). `HybridRetriever` fuses retrievers by RRF (`ALEPH_RETRIEVER=hybrid` = lexical + embeddings). Defaults to `FTSRetriever` (SQLite FTS5 + BM25) when the store has `claims_fts` available, else `KeywordRetriever` (LIKE-based scoring). Plug in a different backend by passing an explicit `retriever=` — the rest of the pipeline is agnostic.
 3. **Context filter** — `_filter_claims_by_context` drops retracted (unless `include_retracted`) and filters by jurisdiction/date/domain using `source_metadata`. Drops are logged.
+3b. **Expand** (`_expand_evidence`, on unless `expand=False`) — add up to `retrieve_k // 2` claims that conflict with or are conditions of retrieved claims, context-filtered, each with an "included because" note; the claims block also lists each claim's conditions.
 4. **Retrieve concepts** — keyword match on `subject` OR `statement`, filtered to `status='active'`, ordered by confidence then `last_validated_at`. Default cap is `max(5, retrieve_k // 3)`.
-5. **Disposition grouping** — `_group_by_disposition` looks up non-`unresolved` contradictions involving retrieved claims and bundles them into `replications | reconciled | coexisting | distinguished | disputed | gaps`. This block is shown to the synthesizer so it can present conflicts honestly instead of picking a side.
+5. **Disposition grouping** — `_group_by_disposition` looks up every contradiction touching the claim set (open ones as `unresolved`; legacy `contradiction-resolve` rows are settled and skipped) and bundles them into `replications | reconciled | coexisting | distinguished | disputed | gaps | unresolved` (unresolved only when both sides are in the set; the prompt says to present both and call the conflict unresolved). This block is shown to the synthesizer so it can present conflicts honestly instead of picking a side.
 6. **Synthesize** — `SYNTHESIZE_V2_SYSTEM` + template. Each factual sentence ends with `[claim:ID]` and/or `[concept:ID]` citations. The prompt has per-disposition handling instructions (e.g. `replicate` ⇒ one sentence citing all member IDs; `gap` ⇒ use the exact "Flagged for expert review" phrasing).
 7. **Verify** — per-sentence, per-reference. `[claim:ID]` goes through `VERIFY_SYSTEM` against the claim's span; `[concept:ID]` goes through `VERIFY_CONCEPT_SYSTEM` against the *union* of the concept's support spans. Verdicts are `GROUNDED | PARTIAL | UNGROUNDED | ERROR` (ERROR is a verifier-itself failure, distinct from UNGROUNDED). Worst verdict wins at the sentence level; `_annotate_answer` lists every non-GROUNDED ref individually in the "**Verifier flags**" footer.
-8. **Cache** — write `{claim_ids, concept_ids}` intersected with what was actually retrieved (hallucinated IDs never enter the cache index).
+8. **Cache** — write `{claim_ids, concept_ids}` intersected with what was actually retrieved (hallucinated IDs never enter the cache index), plus `considered_claim_ids` (everything shown; not an invalidation index — filtered to active claims on read). Only default views (verified with the LLM verifier, expansion on) are cached. Adding, disposing, reopening or resolving a contradiction invalidates views citing either side (`_invalidate_cache_for_contradiction_tx`).
+9. **Read-time extras** — `claim_ids_unused` and `counter_evidence(store, cited)` are computed on every read, fresh or cached, so they never go stale in cached prose.
 
 ### LLM adapter boundary ([src/aleph/llm.py](src/aleph/llm.py))
 `LLM.complete` and `LLM.complete_json` are the only two methods any other module calls. `complete_json` strips ```json fences and retries once with a "re-emit as strict JSON" nudge on parse failure. To swap Anthropic for another provider, rewrite this file — nothing else imports the SDK.
@@ -201,6 +211,7 @@ Schema version 2 (`MIGRATIONS` in db.py; each migration runs inside an explicit 
 Additional columns added via `_run_alters`:
 - `contradictions.{kind, disposition, disposition_at, candidate_disposition, overlap_score}`
 - `view_cache.concept_ids` (JSON list, default `'[]'`)
+- `view_cache.considered_claim_ids` (JSON list, Phase 3)
 
 ### The retraction cascade
 Every path that takes claims out of the active set (`supersede_claim`, `retract_source`, `remove_source`, the `retracted` disposition) calls `Store._on_claims_deactivated_tx`, which:

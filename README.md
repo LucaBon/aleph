@@ -59,7 +59,7 @@ ANTHROPIC_API_KEY=... python benchmark/run_live.py  # against a real model
 
 **Literature review under changing evidence.** Ingest 20 papers on a topic; ask "what's the consensus on X?"; get a paragraph with sentence-level citations. When a paper is retracted, `aleph remove <id>` cascades — every cached view that cited it is invalidated, every downstream answer regenerates without the retracted claim bleeding through.
 
-**Policy Q&A inside a regulated org.** Ingest the current policy set. When policies update, ingest the new version too; `aleph lint` flags the conflicting clauses. A resolution workflow (`--resolve-by-recency` or manual `contradiction-resolve`) marks the old clause as superseded. Answers to "what's our data retention policy?" always cite the current source — with the exact span quoted inline.
+**Policy Q&A inside a regulated org.** Ingest the current policy set. When policies update, ingest the new version too; `aleph lint` flags the conflicting clauses. A resolution workflow (`--resolve-by-recency` or manual `contradiction-resolve`) marks the old clause as superseded. Recency means the policy's own `effective_at` date (set with `source-authority-set`), not when it was ingested; undated pairs stay open. Answers to "what's our data retention policy?" always cite the current source — with the exact span quoted inline.
 
 **Durable agent memory with no drift.** Your agent loop extracts claims as it reads material, via the `claim-add` JSON command. Each claim enters the store only if its span is a verbatim substring of the source — ungrounded claims are refused at the write boundary. The agent can later retrieve claims by subject or keyword and compose answers without ever paraphrasing its own prior prose.
 
@@ -233,6 +233,9 @@ claim-search QUERY [-k N] [--compact|--fields id,predicate,...]   FTS5/LIKE
 claim-by-subject SUBJECT [--compact|--fields ...]                 alias-resolved
 claim-supersede OLD NEW          mark OLD as superseded
 subjects                         distinct subjects by count
+
+# answer checks
+counter-evidence --claim-ids 1,2    uncited sides of live conflicts with the claims an answer cites
 
 # review queue (claims, contradictions, concepts, aliases)
 review-list [--status open|accepted|rejected|obsolete|all] [--type T]

@@ -19,7 +19,7 @@ This roadmap came out of an external review (September 2026). Phases are ordered
 | Alias merges are reversible | **Yes** | `alias_events` merge log, `alias-undo`, and `alias-add` refuses to overwrite without `--force` and rejects cycles along the whole chain. Covered by property and scenario tests, run in CI on every push |
 | A claim faithfully represents its span (numbers, negation, scope) | **Partly** | Numbers, dates, units, negation and entities are checked deterministically against the span and its context window on every claim write, and flagged claims go to the review queue (`aleph.fidelity`, `review-list`). The checker flags every seeded mismatch in `tests/fixtures/fidelity_seeded.json` in CI. Scope and paraphrase errors are not checked, and flags don't block writes |
 | The verifier's false-accept / false-reject rates are known | **No** | The eval harness and a layered verifier exist (Phase 2), but the pair set has only draft labels, and neither verifier has been run on human labels |
-| Answers surface contradicting evidence they didn't use | **No** | Phase 3 |
+| Answers surface contradicting evidence they didn't use | **Partly** | `ask` pulls in claims that conflict with, or are conditions of, retrieved claims. It shows unresolved conflicts to the synthesizer, and it reports uncited counter-evidence and evidence considered but not cited on every read, including cache hits. The synthesizer can still ignore what it's shown; nothing measures how often it does |
 | Reviewers check Aleph answers faster *and* more accurately than RAG answers | **Unmeasured** | Phase 6: seeded-error user study |
 
 "Implemented, not yet verified" becomes **Yes** only when the phase's exit criteria below are met and running in CI. Status last checked against the code on 2026-09-28.
@@ -29,7 +29,7 @@ The "83%" figure in earlier READMEs came from a fake-LLM run on six sentences. I
 ## Where the review was already addressed
 
 - Retrieval is not keyword-only: `FTSRetriever` and `EmbeddingRetriever` exist. What's missing is hybrid fusion (Phase 3).
-- Recency auto-resolution is already opt-in (`lint --resolve-by-recency`). It sorts on claim extraction time (`claims.extracted_at`), not source date. That is a bug, fixed in Phase 3.
+- Recency auto-resolution is opt-in (`lint --resolve-by-recency`). It used to sort on claim extraction time (`claims.extracted_at`) rather than source date. Phase 3 fixed that.
 - Contradiction detection already blocks by subject. The problem is that the pre-filter sends almost every same-subject pair to the LLM (Phase 3).
 
 ## Phases
@@ -129,11 +129,41 @@ Also fixed: `_init_fts` never backfilled a store created before FTS existed, bec
 - Recency resolution by source date; legal-domain sources ranked by authority.
 
 **Exit criteria:**
-- Hybrid retrieval beats both FTS-only and embedding-only on claim recall@k over a labeled query set.
-- The contradiction pre-filter cuts LLM pair judgements by a measured factor on `corpus/` without losing any contradiction in a hand-labeled sample.
-- `lint --resolve-by-recency` orders by source date, with a test.
+- Hybrid retrieval beats both FTS-only and embedding-only on claim recall@k over a labeled query set. **Open:** the harness and a draft query set exist; human labels and an embeddings run are needed.
+- The contradiction pre-filter cuts LLM pair judgements by a measured factor on `corpus/` without losing any contradiction in a hand-labeled sample. **Deferred** until the Phase 4 core is decided.
+- `lint --resolve-by-recency` orders by source date, with a test. **Met:** `tests/test_recency.py`, in CI.
 
 The contradiction-scaling work is conditional on Phase 4 keeping contradictions in, or close to, the core (see Sequencing notes).
+
+**Status (2026-09-29):** everything except the contradiction-scaling item is in place. The retrieval exit criterion is unmeasured.
+
+- **Recency by source date** (`lint.resolve_by_source_date`; `resolve_by_recency` wraps it). The source's own date decides (`authority.source_date`: issued, published, effective or reviewed, depending on the domain), never extraction time. Between two legal sources, authority level decides first (lex superior), then date (lex posterior). Each step needs its field on both sources. Missing fields never count as lowest. These pairs stay open, each reported with its reason:
+  - pairs from different domains (`mixed_domain`);
+  - legal pairs from unrelated jurisdictions (`cross_jurisdiction`);
+  - legal pairs split only by specificity (`lex_specialis`): a special rule displaces the general one only within its scope, which is `distinguish`, not `supersede`;
+  - cross-subject pairs;
+  - undated pairs and ties;
+  - pairs that `dispose` refuses.
+- **Expansion:** `ask` and `compose` add claims that conflict with, or are conditions of, retrieved claims, up to `k // 2` of them. Each goes through the context filter and is labeled "included because: …". The claims block lists each claim's conditions. Open conflicts (never disposed, or reopened by the cascade) appear in the dispositions block as `unresolved`, with a prompt rule to present both sides. `--no-expand` turns this off. Adding a contradiction, disposing it, reopening it, or resolving it with `contradiction-resolve` now invalidates views citing either side, because their prose may describe the old conflict state.
+- **`claim_ids_unused`:** the claims shown to the synthesizer but not cited. `view_cache.considered_claim_ids` stores them. It isn't an invalidation index: a cache hit filters it to claims that are still active.
+- **Counter-evidence check** (`query.counter_evidence`; the agent-mode command is `counter-evidence --claim-ids`): the uncited side of any live conflict (open, `dispute` or `gap`) involving a cited claim. It is computed on every read, so it reflects contradictions recorded after the view was cached, without invalidating the view.
+- **Hybrid retrieval** (`HybridRetriever`, reciprocal rank fusion with k=60; `ALEPH_RETRIEVER=hybrid` fuses FTS with embeddings) and a **retrieval eval** (`python -m aleph.retrieval_eval`, [benchmark/retrieval_eval/](../benchmark/retrieval_eval/)).
+  - The query sets carry **draft** labels.
+  - On a local store built from `corpus/` (agent-extracted claims; the store isn't in the repo), recall@10 is 0.79 for FTS and 0.73 for keyword. The labels are draft.
+  - The embedding and hybrid retrievers haven't been run: they need the `embeddings` extra.
+- **Deferred:** predicate blocking, the stricter pre-filter, and review-queue routing for detected contradictions. They wait on the Phase 4 core decision, per the sequencing notes.
+
+Also fixed: a non-default view was being written to the view cache under the default key, where it overwrote the default view. This covered the layered verifier, expansion off, and `--no-verify`. Such views now stay out of the cache.
+
+A code review of this branch found more defects, each now fixed with a regression test:
+
+- contradictions settled with the legacy `contradiction-resolve --keep` were treated as unresolved;
+- auto-resolution superseded cross-subject pairs;
+- legal ranking let missing fields and unrelated jurisdictions decide;
+- views weren't invalidated when a contradiction changed;
+- disposition grouping read only the newest 1000 contradictions in the store;
+- `HybridRetriever` broke retrievers that implement only the minimal protocol;
+- the eval's source matching matched `data.txt` for `a.txt`.
 
 ### Phase 4: Minimal core with optional extensions
 - A `features` store config. The core is sources, claims, views and the cascade; concepts, conditions, contradictions and authority become opt-in.

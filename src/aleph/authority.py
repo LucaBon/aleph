@@ -189,6 +189,30 @@ def authority_rank(meta: dict) -> tuple:
     return (0,)
 
 
+# When each domain says a source was issued, in priority order.
+_DATE_FIELDS = {
+    "legal": ("issued_at", "effective_at"),
+    "scientific": ("published_at",),
+    "policy": ("effective_at",),
+    "corporate": ("reviewed_at",),
+    "generic": ("published_at", "issued_at", "effective_at"),
+}
+
+
+def source_date(meta: Optional[dict]) -> Optional[float]:
+    """The source's own date (unix seconds) from its metadata, or None.
+    This is when the source was issued or published, never when it was
+    ingested or its claims extracted."""
+    if not meta:
+        return None
+    inner = meta.get("metadata", meta)
+    for field in _DATE_FIELDS.get(meta.get("domain"), _DATE_FIELDS["generic"]):
+        value = inner.get(field)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
 def is_retracted(meta: dict) -> bool:
     """Scientific-domain only: metadata.retracted is True. Other domains:
     always False (retraction is not a universal concept)."""
