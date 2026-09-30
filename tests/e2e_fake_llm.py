@@ -142,13 +142,13 @@ def main():
         print("=" * 60)
         print("STEP 5: RESOLVE BY RECENCY")
         print("=" * 60)
-        # hack: make the '10 years' claim appear newer than the '8 years' claim
-        store.conn.execute(
-            "UPDATE claims SET extracted_at = extracted_at + 100 WHERE object = 'well beyond 10 years under typical use'"
-        )
-        store.conn.commit()
+        # Recency is the *source* date. Both claims come from the one example
+        # file, which has no date, so nothing can be ordered: the pair stays
+        # open. (Extraction time used to decide this; it no longer does.)
         n = resolve_by_recency(store)
         print(f"  resolved: {n}")
+        assert n == 0, "an undated pair from a single source must stay open"
+        assert store.list_contradictions(only_open=True), "the pair should still be open"
         print(f"  stats: {store.stats()}")
 
         # 6. REMOVE A SOURCE
@@ -2614,7 +2614,8 @@ def tier8_query_integration_regression():
             return _orig_complete(system, user, max_tokens)
         fake810.complete = _custom_complete
 
-        run_query(store, fake810, "tesla retention consistency", use_cache=True, verify=False)
+        # verify=True: unverified views are not cached (Phase 3).
+        run_query(store, fake810, "tesla retention consistency", use_cache=True, verify=True)
         assert store.stats()["cached_views"] >= 1, \
             "T8.10 precondition: at least 1 cached view"
 

@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .db import Store, view_cache_key
+from .db import Store, _statuses_sql, view_cache_key
 from .llm import LLM
 from .log import log
 from .retrieval import Retriever, default_retriever
@@ -107,12 +107,20 @@ epistemic shape):
   identified; an unstated premise may explain the divergence. Flagged
   for expert review."
 
+- unresolved: A conflict that was detected but not yet disposed of.
+  Present both claims, say plainly that they conflict and that the
+  conflict is unresolved. Do not pick one. Example: "One source reports X
+  [claim:A]; another reports Y [claim:B]. This conflict has not been
+  resolved."
+
 - supersede / retracted: Do not present the superseded or retracted claim
   as a live finding. If context requests include_retracted, you may
   mention it with an explicit annotation like "(retracted)".
 
 If a claim or concept was retrieved but you do not cite it, that is fine
-— not every retrieved item must be used.
+— not every retrieved item must be used. Some claims are included because
+they conflict with, or state a condition of, a retrieved claim ("included
+because: ..."); a condition tells you when the claim it scopes applies.
 
 Format: plain markdown. No headings unless the answer genuinely has
 sections. Start with a direct answer to the question."""
@@ -211,6 +219,12 @@ class QueryResult:
     claim_ids_used: list[int]
     concept_ids_used: list[int] = field(default_factory=list)
     from_cache: bool = False
+    # Shown to the synthesizer but not cited ("evidence considered but not
+    # used"). Recomputed on a cache hit, dropping claims no longer active.
+    claim_ids_unused: list[int] = field(default_factory=list)
+    # Uncited sides of conflicts involving cited claims (counter_evidence()).
+    # Always computed at read time, so it reflects the current contradictions.
+    counter_evidence: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -235,8 +249,15 @@ def _extract_keywords(query: str) -> list[str]:
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
-def _format_claims_block_v2(claims_with_spans: list[tuple], store: Store) -> str:
-    """Format claims block for SYNTHESIZE_V2 user template."""
+def _format_claims_block_v2(
+    claims_with_spans: list[tuple], store: Store,
+    included_because: Optional[dict[int, str]] = None,
+) -> str:
+    """Format claims block for SYNTHESIZE_V2 user template. Each claim lists
+    its conditions that are also in the block, and expanded claims say why
+    they were included."""
+    included_because = included_because or {}
+    shown = {claim["id"] for claim, _ in claims_with_spans}
     lines = []
     for claim, span in claims_with_spans:
         # Get source metadata compact form
@@ -247,12 +268,23 @@ def _format_claims_block_v2(claims_with_spans: list[tuple], store: Store) -> str
                 {"domain": meta["domain"], **meta["metadata"]},
                 default=str,
             )
-        lines.append(
+        entry = (
             f"[claim:{claim['id']}] ({claim['confidence']:.2f}) "
             f"{claim['subject']} — {claim['predicate']} — {claim['object']}\n"
             f"    source span: {span[:300]!r}{'...' if len(span) > 300 else ''}\n"
             f"    source metadata: {meta_compact}"
         )
+        conds = [
+            f"[claim:{c['condition_claim_id']}] ({c['kind']}, "
+            f"{'explicit' if c['explicit'] else 'inferred'})"
+            for c in store.get_claim_conditions(claim["id"])
+            if c["condition_claim_id"] in shown
+        ]
+        if conds:
+            entry += "\n    conditions: " + ", ".join(conds)
+        if claim["id"] in included_because:
+            entry += f"\n    included because: {included_because[claim['id']]}"
+        lines.append(entry)
     return "\n\n".join(lines) if lines else "none"
 
 
@@ -294,6 +326,8 @@ def _format_dispositions_block(groups: dict) -> str:
         lines.append(f"- dispute: [claim:{a}] vs [claim:{b}]")
     for a, b in groups.get("gaps", []):
         lines.append(f"- gap: [claim:{a}] vs [claim:{b}]")
+    for a, b in groups.get("unresolved", []):
+        lines.append(f"- unresolved: [claim:{a}] vs [claim:{b}]")
     return "\n".join(lines) if lines else "none"
 
 
@@ -493,9 +527,74 @@ def _filter_claims_by_context(
 # Disposition-aware grouping
 # ---------------------------------------------------------------------------
 
+def _claims_with_spans(store: Store, ids: list[int], include_retracted: bool) -> list:
+    """Claim rows shaped like a retriever's (with ``span_text``), by id."""
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    rows = store.conn.execute(
+        "SELECT c.*, SUBSTR(s.content, c.span_start + 1, c.span_end - c.span_start) "
+        "AS span_text FROM claims c JOIN sources s ON c.source_id = s.id "
+        f"WHERE c.id IN ({marks}) AND c.status IN ({_statuses_sql(include_retracted)})",
+        ids,
+    ).fetchall()
+    by_id = {r["id"]: r for r in rows}
+    return [by_id[i] for i in ids if i in by_id]
+
+
+# How an expanded claim relates to the retrieved one, by disposition, so a
+# replication isn't pitched to the synthesizer as a conflict.
+_RELATION_BY_DISPOSITION = {
+    "replicate": "replicates",
+    "coexist": "coexists with",
+    "distinguish": "is distinguished from",
+    "reconcile": "is reconciled with",
+    "dispute": "disputes",
+    "gap": "has an unexplained conflict with",
+}
+
+
+def _expand_evidence(
+    store: Store, claim_rows: list, context: Optional[dict], limit: int,
+) -> tuple[list, dict[int, str]]:
+    """Add claims that conflict with, or are conditions of, retrieved claims.
+
+    Retrieval matches words; the claim that contradicts or scopes a
+    retrieved claim may share none of them. Added claims go through the
+    same context filter, at most ``limit`` of them, in retrieval order.
+    Returns (rows, {added claim id: why it was included}).
+    """
+    have = {r["id"] for r in claim_rows}
+    candidates: dict[int, str] = {}
+    for row in claim_rows:
+        cid = row["id"]
+        for x in store.conn.execute(
+            "SELECT claim_a_id, claim_b_id, status, disposition FROM contradictions x "
+            f"WHERE (claim_a_id = ? OR claim_b_id = ?) AND NOT {_KEEP_RESOLVED_SQL} "
+            "ORDER BY id", (cid, cid),
+        ):
+            other = x["claim_b_id"] if x["claim_a_id"] == cid else x["claim_a_id"]
+            if other in have or _senses_differ(store, cid, other):
+                continue
+            relation = "conflicts with" if x["status"] == "open" else \
+                _RELATION_BY_DISPOSITION.get(x["disposition"], "conflicts with")
+            candidates.setdefault(other, f"{relation} [claim:{cid}]")
+        for cond in store.get_claim_conditions(cid):
+            other = cond["condition_claim_id"]
+            if other not in have:
+                candidates.setdefault(other, f"{cond['kind']} condition of [claim:{cid}]")
+    if not candidates or limit <= 0:
+        return claim_rows, {}
+    include_retracted = bool((context or {}).get("include_retracted"))
+    extra = _claims_with_spans(store, list(candidates), include_retracted)
+    extra = _filter_claims_by_context(store, extra, context)[:limit]
+    return list(claim_rows) + extra, {r["id"]: candidates[r["id"]] for r in extra}
+
+
 def _group_by_disposition(store: Store, claim_rows: list) -> dict:
     """Lookup contradictions where either claim is in the retrieved set and
-    disposition != 'unresolved'. Build groups by disposition type.
+    build groups by disposition type. Unresolved pairs are grouped only when
+    both claims are in the set.
 
     WS-E.2: when both claims of a contradiction have predicate-sense
     assignments and the senses differ, skip the pair — different relations
@@ -506,11 +605,21 @@ def _group_by_disposition(store: Store, claim_rows: list) -> dict:
     if not claim_id_set:
         return {
             "replications": [], "reconciled": [], "coexisting": [],
-            "distinguished": [], "disputed": [], "gaps": [],
+            "distinguished": [], "disputed": [], "gaps": [], "unresolved": [],
         }
 
-    # Fetch all non-unresolved contradictions involving these claims
-    all_contradictions = store.list_contradictions_full(limit=1000)
+    # Every contradiction touching the set (not a store-wide top-N, which
+    # would drop old conflicts of the claims actually shown).
+    ids = sorted(claim_id_set)
+    marks = ",".join("?" * len(ids))
+    all_contradictions = store.conn.execute(
+        "SELECT ct.*, cr.rule, cr.applies_when, cr.rationale_concept_id "
+        "FROM contradictions ct "
+        "LEFT JOIN contradiction_rules cr ON ct.id = cr.contradiction_id "
+        f"WHERE ct.claim_a_id IN ({marks}) OR ct.claim_b_id IN ({marks}) "
+        "ORDER BY ct.id",
+        (*ids, *ids),
+    ).fetchall()
 
     groups: dict = {
         "replications": [],
@@ -519,6 +628,7 @@ def _group_by_disposition(store: Store, claim_rows: list) -> dict:
         "distinguished": [],
         "disputed": [],
         "gaps": [],
+        "unresolved": [],
     }
 
     for ct in all_contradictions:
@@ -528,9 +638,6 @@ def _group_by_disposition(store: Store, claim_rows: list) -> dict:
 
         # Skip if neither claim is in the retrieved set
         if a_id not in claim_id_set and b_id not in claim_id_set:
-            continue
-        # Skip unresolved
-        if disposition is None or disposition == "unresolved":
             continue
         # WS-E.2: if both claims have differing predicate senses, treat them
         # as different relations and skip the disposition group.
@@ -546,6 +653,17 @@ def _group_by_disposition(store: Store, claim_rows: list) -> dict:
             a_sense is not None and b_sense is not None
             and a_sense["sense_id"] != b_sense["sense_id"]
         ):
+            continue
+
+        # Unresolved means open (never disposed, or reopened). A legacy
+        # `contradiction-resolve --keep` leaves disposition at its default but
+        # status resolved: settled, so not shown. Unresolved pairs are shown
+        # only when both sides are in the set, so both can be presented.
+        if ct["status"] == "open":
+            if a_id in claim_id_set and b_id in claim_id_set:
+                groups["unresolved"].append((a_id, b_id))
+            continue
+        if disposition is None or disposition == "unresolved":
             continue
 
         rule = ct["rule"] or ""
@@ -610,16 +728,109 @@ def _get_cached_view(store: Store, query_hash: str):
 def _cache_view(
     store: Store, query_hash: str, question: str, response: str,
     claim_ids: list[int], concept_ids: list[int],
+    considered_claim_ids: Optional[list[int]] = None,
 ) -> None:
-    """Write to view_cache with the new hash, including concept_ids."""
+    """Write to view_cache with the new hash, including concept_ids.
+
+    ``considered_claim_ids`` (everything shown to the synthesizer) is not an
+    invalidation index: the prose doesn't depend on uncited claims, so it is
+    filtered to active claims when read instead."""
     with store.tx():
         store.conn.execute(
             "INSERT OR REPLACE INTO view_cache "
-            "(query_hash, query, response, claim_ids, concept_ids, generated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(query_hash, query, response, claim_ids, concept_ids, generated_at, "
+            " considered_claim_ids) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (query_hash, question, response,
-             json.dumps(claim_ids), json.dumps(concept_ids), time.time()),
+             json.dumps(claim_ids), json.dumps(concept_ids), time.time(),
+             json.dumps(sorted(considered_claim_ids or []))),
         )
+
+
+# A conflict is live while it is open (detected, never disposed, or reopened
+# by the cascade) or disposed as dispute / gap. coexist / distinguish /
+# reconcile carry a rule saying when each side applies; replicate is
+# agreement; supersede / retracted and the legacy `contradiction-resolve
+# --keep` (status resolved, disposition left at its default) settle it.
+_COUNTER_DISPOSITIONS = ("dispute", "gap")
+_LIVE_CONFLICT_SQL = (
+    "(x.status = 'open' OR x.disposition IN ("
+    + ", ".join(f"'{d}'" for d in _COUNTER_DISPOSITIONS) + "))"
+)
+# Settled with one side kept: the other side is no longer part of the picture.
+_KEEP_RESOLVED_SQL = (
+    "(x.status = 'resolved' AND COALESCE(x.disposition, 'unresolved') "
+    "IN ('unresolved', 'supersede', 'retracted'))"
+)
+
+
+def _senses_differ(store: Store, a_id: int, b_id: int) -> bool:
+    """WS-E.2: both claims have predicate senses and they differ, so the
+    pair is two different relations, not a conflict."""
+    rows = store.conn.execute(
+        "SELECT claim_id, sense_id FROM claim_predicate_senses WHERE claim_id IN (?, ?)",
+        (a_id, b_id),
+    ).fetchall()
+    senses = {r["claim_id"]: r["sense_id"] for r in rows}
+    return len(senses) == 2 and senses[a_id] != senses[b_id]
+
+
+def counter_evidence(
+    store: Store, cited_claim_ids, context: Optional[dict] = None,
+) -> list[dict]:
+    """For each cited claim, the active, uncited claims it is in a live
+    conflict with (an open contradiction, or one disposed as dispute or
+    gap). An answer that cites one side of such a conflict and not the
+    other is presenting a contested fact as settled. Counter claims go
+    through the same context filter as retrieval, and pairs with differing
+    predicate senses (WS-E.2) are not conflicts."""
+    cited = set(cited_claim_ids)
+    if not cited:
+        return []
+    marks = ",".join("?" * len(cited))
+    rows = store.conn.execute(
+        f"""
+        SELECT x.id, x.claim_a_id, x.claim_b_id,
+               CASE WHEN x.status = 'open' THEN 'unresolved' ELSE x.disposition END
+                   AS disposition
+        FROM contradictions x
+        JOIN claims a ON a.id = x.claim_a_id
+        JOIN claims b ON b.id = x.claim_b_id
+        WHERE (x.claim_a_id IN ({marks}) OR x.claim_b_id IN ({marks}))
+          AND a.status = 'active' AND b.status = 'active'
+          AND {_LIVE_CONFLICT_SQL}
+        ORDER BY x.id
+        """,
+        (*cited, *cited),
+    ).fetchall()
+    candidates = []
+    for r in rows:
+        if _senses_differ(store, r["claim_a_id"], r["claim_b_id"]):
+            continue
+        for mine, other in ((r["claim_a_id"], r["claim_b_id"]),
+                            (r["claim_b_id"], r["claim_a_id"])):
+            if mine in cited and other not in cited:
+                candidates.append({"cited_claim_id": mine, "counter_claim_id": other,
+                                   "contradiction_id": r["id"],
+                                   "disposition": r["disposition"]})
+    if not candidates or not context:
+        return candidates
+    allowed = {row["id"] for row in _filter_claims_by_context(
+        store, _claims_with_spans(store, sorted({c["counter_claim_id"] for c in candidates}),
+                                  bool(context.get("include_retracted"))),
+        context)}
+    return [c for c in candidates if c["counter_claim_id"] in allowed]
+
+
+def _claim_ids_with_status(store: Store, ids, include_retracted: bool = False) -> set[int]:
+    """The ids still retrievable: active, or retracted too when the context
+    asks for retracted claims (as retrieval does)."""
+    ids = list(ids)
+    if not ids:
+        return set()
+    marks = ",".join("?" * len(ids))
+    return {r[0] for r in store.conn.execute(
+        f"SELECT id FROM claims WHERE status IN ({_statuses_sql(include_retracted)}) "
+        f"AND id IN ({marks})", ids)}
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +848,7 @@ def query(
     retriever: Retriever | None = None,
     concept_k: Optional[int] = None,
     verifier=None,
+    expand: bool = True,
 ) -> QueryResult:
     """Run the full question -> verified answer pipeline.
 
@@ -654,12 +866,19 @@ def query(
     shows it beats the default). Its verdicts map SUPPORTED -> GROUNDED,
     UNSUPPORTED -> UNGROUNDED, UNCERTAIN -> UNCERTAIN; reasons are prefixed
     with the deciding layer. Concept citations keep the union-of-spans check.
-    With a `verifier`, the view cache is bypassed (neither read nor written).
+    With a `verifier`, `expand=False` or `verify=False`, the view cache is
+    bypassed (neither read nor written).
+
+    `expand` (default on) adds claims that conflict with, or are conditions
+    of, retrieved claims — up to ``retrieve_k // 2`` of them.
     """
     # --- cache check ---
-    # Views are cached under ask's default verifier. A view verified another
-    # way is neither served from nor written to the cache.
-    if verifier is not None:
+    # Views are cached under ask's defaults (verified by the LLM verifier,
+    # expansion on). A
+    # view built any other way is neither served from nor written to the
+    # cache (see step 8).
+    default_view = verifier is None and expand and verify
+    if not default_view:
         use_cache = False
     cache_hash = _compute_cache_hash(question, context)
     if use_cache:
@@ -670,13 +889,20 @@ def query(
                 concept_ids_cached = json.loads(cached["concept_ids"])
             except (json.JSONDecodeError, TypeError, KeyError):
                 pass
+            used = json.loads(cached["claim_ids"])
+            considered = json.loads(cached["considered_claim_ids"] or "[]")
             return QueryResult(
                 query=question,
                 answer=cached["response"],
                 citations=[],
-                claim_ids_used=json.loads(cached["claim_ids"]),
+                claim_ids_used=used,
                 concept_ids_used=concept_ids_cached,
                 from_cache=True,
+                claim_ids_unused=sorted(
+                    _claim_ids_with_status(
+                        store, considered, bool((context or {}).get("include_retracted")))
+                    - set(used)),
+                counter_evidence=counter_evidence(store, used, context),
             )
 
     # 1. retrieve candidate claims
@@ -711,6 +937,12 @@ def query(
             from_cache=False,
         )
 
+    # 2b. expand to conflicting and condition claims
+    included_because: dict[int, str] = {}
+    if expand:
+        claim_rows, included_because = _expand_evidence(
+            store, claim_rows, context, retrieve_k // 2)
+
     # 3. retrieve concepts
     if concept_k is None:
         concept_k = max(5, retrieve_k // 3)
@@ -723,7 +955,7 @@ def query(
     claims_with_spans = [(row, row["span_text"] or "") for row in claim_rows]
 
     # 5. synthesize view (always v2)
-    claims_block = _format_claims_block_v2(claims_with_spans, store)
+    claims_block = _format_claims_block_v2(claims_with_spans, store, included_because)
     concepts_block = _format_concepts_block(concept_rows)
     dispositions_block = _format_dispositions_block(disposition_groups)
     context_block = json.dumps(context, default=str) if context else "none"
@@ -806,11 +1038,13 @@ def query(
     claim_ids_used = sorted(cited_claim_ids)
     concept_ids_used = sorted(cited_concept_ids)
 
-    # 8. cache
-    _cache_view(
-        store, cache_hash, question, annotated,
-        claim_ids_used, concept_ids_used,
-    )
+    # 8. cache (refreshed even under use_cache=False; only a non-default
+    # view stays out of it)
+    if default_view:
+        _cache_view(
+            store, cache_hash, question, annotated,
+            claim_ids_used, concept_ids_used, sorted(retrieved_ids),
+        )
 
     return QueryResult(
         query=question,
@@ -819,6 +1053,8 @@ def query(
         claim_ids_used=claim_ids_used,
         concept_ids_used=concept_ids_used,
         from_cache=False,
+        claim_ids_unused=sorted(retrieved_ids - cited_claim_ids),
+        counter_evidence=counter_evidence(store, claim_ids_used, context),
     )
 
 

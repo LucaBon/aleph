@@ -271,6 +271,9 @@ def _run_alters(conn: sqlite3.Connection) -> None:
         # 'disposition' (a `retracted` contradiction disposition dropped it).
         # source-unretract only revives the former.
         "ALTER TABLE claims ADD COLUMN retracted_cause TEXT",
+        # Phase 3: every claim a view's synthesizer saw, cited or not. Not an
+        # invalidation index; filtered to active claims when read.
+        "ALTER TABLE view_cache ADD COLUMN considered_claim_ids TEXT NOT NULL DEFAULT '[]'",
     ]
     for stmt in alters:
         try:
@@ -677,6 +680,19 @@ def _revert_replicate_bump_tx(cx: sqlite3.Connection, row) -> None:
             )
 
 
+def _invalidate_cache_for_contradiction_tx(
+    cx: sqlite3.Connection, contradiction_id: int, cause: str,
+) -> int:
+    """Drop views citing either side of a contradiction whose existence or
+    disposition just changed: they were synthesized (and expanded) against
+    the old conflict state, and may present it in their prose."""
+    row = cx.execute("SELECT claim_a_id, claim_b_id FROM contradictions WHERE id = ?",
+                     (contradiction_id,)).fetchone()
+    if row is None:
+        return 0
+    return _invalidate_cache_for_claims(cx, [row[0], row[1]], cause=cause)
+
+
 def _reopen_contradictions_tx(
     cx: sqlite3.Connection, contradiction_ids, cause: str,
 ) -> list[int]:
@@ -693,6 +709,7 @@ def _reopen_contradictions_tx(
             "reopened_at = ?, reopened_cause = ?, reopened_from = ? WHERE id = ?",
             (time.time(), cause, row["disposition"] or "resolved", cid),
         )
+        _invalidate_cache_for_contradiction_tx(cx, cid, cause=f"reopen:{cause}")
         reopened.append(cid)
     if reopened:
         log("contradictions_reopened", level="info", cause=cause, contradiction_ids=reopened)
@@ -1605,6 +1622,7 @@ class Store:
                 "INSERT INTO contradictions (claim_a_id, claim_b_id, detected_at) VALUES (?, ?, ?)",
                 (lo, hi, time.time()),
             )
+            _invalidate_cache_for_contradiction_tx(cx, cur.lastrowid, cause="contradiction_add")
             return cur.lastrowid
 
     def list_contradictions(self, only_open: bool = True) -> list[sqlite3.Row]:
@@ -1947,6 +1965,7 @@ class Store:
                 (disposition, time.time(), overlap_score, status,
                  keep, da, db_, contradiction_id),
             )
+            _invalidate_cache_for_contradiction_tx(cx, contradiction_id, cause="disposition")
             if rule is not None:
                 cx.execute(
                     "INSERT OR REPLACE INTO contradiction_rules "
@@ -1984,6 +2003,7 @@ class Store:
                 "VALUES (?, ?, ?, ?, 1, ?, ?)",
                 (lo, hi, time.time(), "unknown", relation_kind, justification),
             )
+            _invalidate_cache_for_contradiction_tx(cx, cur.lastrowid, cause="contradiction_add")
             return cur.lastrowid
 
     def attest_concept(
@@ -2039,6 +2059,7 @@ class Store:
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (lo, hi, time.time(), kind, candidate_disposition, overlap_score),
             )
+            _invalidate_cache_for_contradiction_tx(cx, cur.lastrowid, cause="contradiction_add")
             return cur.lastrowid
 
     def list_contradictions_full(

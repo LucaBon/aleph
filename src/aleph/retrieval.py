@@ -10,6 +10,8 @@ Implementations shipped here:
   triples). The lowest-common-denominator backend; always available.
 - ``FTSRetriever`` uses SQLite FTS5 (BM25, word-tokenized, stopword-aware).
   The default when the store advertises ``fts_enabled``.
+- ``HybridRetriever`` (Phase 3) fuses several retrievers by reciprocal
+  rank fusion; ``ALEPH_RETRIEVER=hybrid`` fuses lexical with embeddings.
 - ``EmbeddingRetriever`` (P2.3) uses ``sentence-transformers`` to compute
   dense embeddings of claim triples and ranks by cosine similarity to the
   query. Vectors are cached in a new ``claim_embeddings`` table keyed by
@@ -266,15 +268,69 @@ class EmbeddingRetriever:
         return [rows[int(i)] for i in order]
 
 
+# ---------------------------------------------------------------------------
+# HybridRetriever (Phase 3): reciprocal rank fusion
+# ---------------------------------------------------------------------------
+
+class HybridRetriever:
+    """Fuses several retrievers' rankings by reciprocal rank fusion.
+
+    Each claim scores ``sum(1 / (k + rank))`` over the lists it appears in
+    (rank starting at 1); ``k=60`` is the usual constant. RRF uses ranks
+    only, so BM25 scores and cosine similarities never have to be put on
+    one scale. Ties break by the claim's best single rank, then by id.
+    Each retriever is asked for ``max(pool, limit)`` candidates.
+    """
+
+    def __init__(self, retrievers: list, *, k: int = 60, pool: int = 50):
+        if not retrievers:
+            raise ValueError("HybridRetriever needs at least one retriever")
+        self.retrievers = list(retrievers)
+        self.k = k
+        self.pool = pool
+
+    def search(
+        self, keywords: list[str], limit: int = 30, *,
+        include_retracted: bool = False,
+    ) -> list:
+        if not keywords:
+            return []
+        n = max(self.pool, limit)
+        score: dict[int, float] = {}
+        best: dict[int, int] = {}
+        rows: dict[int, object] = {}
+        # Like query._search: pass include_retracted only when asked, so
+        # retrievers implementing the minimal protocol still work.
+        extra = {"include_retracted": True} if include_retracted else {}
+        for retriever in self.retrievers:
+            for rank, row in enumerate(retriever.search(keywords, n, **extra), 1):
+                cid = row["id"]
+                score[cid] = score.get(cid, 0.0) + 1.0 / (self.k + rank)
+                best[cid] = min(best.get(cid, rank), rank)
+                rows.setdefault(cid, row)
+        order = sorted(score, key=lambda c: (-score[c], best[c], c))
+        return [rows[c] for c in order[:limit]]
+
+
+def hybrid_retriever(store: Store) -> HybridRetriever:
+    """Lexical (FTS5, else keyword) fused with embeddings. Needs the
+    optional ``embeddings`` extra."""
+    lexical = FTSRetriever(store) if getattr(store, "fts_enabled", False) \
+        else KeywordRetriever(store)
+    return HybridRetriever([lexical, EmbeddingRetriever(store)])
+
+
 def default_retriever(store: Store) -> Retriever:
     """Pick the best retriever available for this store.
 
     Respects the ``ALEPH_RETRIEVER`` env var (``keyword`` | ``fts`` |
-    ``embedding``). Falls back to FTS5 when the store advertises it, then
+    ``embedding`` | ``hybrid``). Falls back to FTS5 when the store advertises it, then
     to keyword. Retrievers are constructed lazily — nothing pays the
     embedding-model import cost unless the caller asks for it.
     """
     pick = os.environ.get("ALEPH_RETRIEVER", "").lower() or None
+    if pick == "hybrid":
+        return hybrid_retriever(store)
     if pick == "embedding":
         return EmbeddingRetriever(store)
     if pick == "keyword":

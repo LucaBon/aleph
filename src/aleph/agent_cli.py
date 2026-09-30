@@ -401,6 +401,28 @@ def cmd_claim_fidelity_check(args, store: Store) -> int:
     return 0
 
 
+def cmd_counter_evidence(args, store: Store) -> int:
+    """The agent-mode counterpart of ask's counter-evidence check: given the
+    claims an answer cites, the uncited sides of their live conflicts."""
+    from .query import counter_evidence
+
+    try:
+        ids = [int(x) for x in args.claim_ids.split(",") if x.strip()]
+    except ValueError:
+        _err("invalid_claim_ids", "--claim-ids must be comma-separated integers",
+             claim_ids=args.claim_ids)
+        return 1
+    ctx = None
+    if args.context:
+        try:
+            ctx = json.loads(args.context)
+        except json.JSONDecodeError as e:
+            _err("invalid_context", f"--context is not valid JSON: {e}")
+            return 1
+    _ok({"claim_ids": ids, "counter_evidence": counter_evidence(store, ids, ctx)})
+    return 0
+
+
 def _review_dict(row) -> dict:
     target = {
         "claim": {"claim_id": row["claim_id"]},
@@ -857,6 +879,8 @@ def cmd_contradiction_resolve(args, store: Store) -> int:
             "UPDATE contradictions SET status = 'resolved', resolved_to = ? WHERE id = ?",
             (args.keep, args.contradiction_id),
         )
+        from .db import _invalidate_cache_for_contradiction_tx
+        _invalidate_cache_for_contradiction_tx(cx, args.contradiction_id, cause="resolve")
     if args.drop is not None:
         store.supersede_claim(args.drop, args.keep)
     _ok({"resolved": args.contradiction_id, "kept": args.keep, "superseded": args.drop})
@@ -1854,6 +1878,7 @@ def cmd_compose(args, store: Store) -> int:
     where concept derivation would help.
     """
     from .query import (
+        _expand_evidence,
         _extract_keywords,
         _filter_claims_by_context,
         _group_by_disposition,
@@ -1885,6 +1910,11 @@ def cmd_compose(args, store: Store) -> int:
     retriever = default_retriever(store)
     claim_rows = _search(retriever, keywords, args.k, ctx)
     claim_rows = _filter_claims_by_context(store, claim_rows, ctx)
+    # Same expansion as ask: claims conflicting with, or conditioning,
+    # retrieved claims, each tagged with why it was included.
+    included_because: dict[int, str] = {}
+    if not args.no_expand:
+        claim_rows, included_because = _expand_evidence(store, claim_rows, ctx, args.k // 2)
 
     # Concept retrieval: active + attested both count as citeable.
     concept_k = args.concept_k if args.concept_k is not None else max(5, args.k // 3)
@@ -1952,6 +1982,7 @@ def cmd_compose(args, store: Store) -> int:
                 "confidence": r["confidence"],
                 "source_id": r["source_id"],
                 "span_text": (r["span_text"] if "span_text" in r.keys() else None) or "",
+                "included_because": included_because.get(r["id"]),
             }
             for r in claim_rows
         ],
@@ -1996,6 +2027,9 @@ def cmd_compose(args, store: Store) -> int:
             ],
             "gap": [
                 {"claim_a": a, "claim_b": b} for a, b in groups["gaps"]
+            ],
+            "unresolved": [
+                {"claim_a": a, "claim_b": b} for a, b in groups["unresolved"]
             ],
         },
         "gaps_without_concept": gaps,
@@ -2466,6 +2500,13 @@ def register_agent_commands(subparsers, common) -> set[str]:
                    help="queue flagged claims for review")
     p.set_defaults(func=cmd_claim_fidelity_check)
 
+    p = _add("counter-evidence",
+             help="uncited sides of live conflicts (open, dispute, gap) with the given claims")
+    p.add_argument("--claim-ids", required=True, help="comma-separated claim ids an answer cites")
+    p.add_argument("--context", default=None,
+                   help="the answer's query context (JSON), so excluded claims aren't reported")
+    p.set_defaults(func=cmd_counter_evidence)
+
     p = _add("review-list", help="list review-queue items (default: open)")
     p.add_argument("--status", default="open",
                    choices=["open", "accepted", "rejected", "obsolete", "all"])
@@ -2800,6 +2841,8 @@ def register_agent_commands(subparsers, common) -> set[str]:
                    help="concepts to retrieve (default max(5, k // 3))")
     p.add_argument("--context", default=None,
                    help='JSON, e.g. \'{"jurisdiction":"US-CA","date":"2026-04-22"}\'')
+    p.add_argument("--no-expand", action="store_true",
+                   help="don't add claims that conflict with or condition retrieved ones")
     p.set_defaults(func=cmd_compose)
 
     # ----- P2.2 report-json (agent-mode; top-level `report` wraps it with formatting) -----
